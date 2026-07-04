@@ -16,7 +16,7 @@ import (
 	"github.com/bborbe/errors"
 	"github.com/golang/glog"
 
-	githubapp "github.com/bborbe/maintainer/lib/githubapp"
+	githubapp "github.com/bborbe/maintainer/githubapp"
 )
 
 // ErrAppCredentialsRequired is returned (wrapped) when no usable GitHub App

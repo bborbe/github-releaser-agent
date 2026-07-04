@@ -11,7 +11,7 @@ require (
 	github.com/bborbe/cqrs v0.6.0
 	github.com/bborbe/errors v1.5.13
 	github.com/bborbe/kafka v1.25.1
-	github.com/bborbe/maintainer/lib v0.39.0
+	github.com/bborbe/maintainer v0.45.0
 	github.com/bborbe/sentry v1.9.18
 	github.com/bborbe/service v1.10.1
 	github.com/bborbe/time v1.27.1

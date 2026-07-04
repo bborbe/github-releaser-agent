@@ -4,7 +4,7 @@
 
 // Package maintainerconfig fetches and exposes the .maintainer.yaml
 // bytes for the github-releaser agent's planning step. The schema
-// itself lives in github.com/bborbe/maintainer/lib/maintainerconfig
+// itself lives in github.com/bborbe/maintainer/maintainerconfig
 // (shared with the github-release watcher and pr-reviewer agent);
 // this package adds ONLY the network seam.
 package maintainerconfig
@@ -26,7 +26,7 @@ import (
 	"github.com/bborbe/errors"
 	"github.com/golang/glog"
 
-	libmaintainerconfig "github.com/bborbe/maintainer/lib/maintainerconfig"
+	libmaintainerconfig "github.com/bborbe/maintainer/maintainerconfig"
 )
 
 // Re-export the lib types so callers of this package need only one
