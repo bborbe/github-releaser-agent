@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "version": "0.9.12"
+  },
+  "plugins": [
+    {"name": "plugin-a", "version": "0.9.12"},
+    {"name": "plugin-b", "version": "0.9.12"},
+    {"name": "plugin-c", "version": "0.9.12"}
+  ]
+}

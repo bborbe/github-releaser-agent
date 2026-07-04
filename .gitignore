@@ -1,0 +1,9 @@
+/.update-logs/
+/.claude/
+/CLAUDE.md
+/.mcp-*
+/cover.out
+/github-releaser
+/run-task
+/vendor/
+/github-releaser-agent
