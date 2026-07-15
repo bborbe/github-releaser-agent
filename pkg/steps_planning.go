@@ -263,6 +263,22 @@ func (s *planningStep) resolveMaintainerConfig(
 	return cfg.Release.ChangelogRewrite, cfg.Release.AllowMajorBump, "", nil
 }
 
+// majorBumpPolicySection returns the runtime-injected classifier policy for
+// the allowed bump range, concatenated into the bump-classification prompt
+// exactly like the "## Current version" section. When major is NOT allowed
+// it forbids a `major` verdict and requires the reasoning to note the cap —
+// mirroring the embedded Pre-1.0 cap. When major IS allowed it returns the
+// empty string, leaving the classifier its full major|minor|patch range.
+func majorBumpPolicySection(majorAllowed bool) string {
+	if majorAllowed {
+		return ""
+	}
+	return "\n\n## Major-bump policy\n\n" +
+		"Major bumps are NOT permitted for this release. You MUST NOT return `major`. " +
+		"If a bullet would otherwise be a breaking or major change, return `minor` instead, " +
+		"and your `reasoning` MUST mention that the major bump was capped."
+}
+
 // resolveBumpVerdict returns the bump verdict either from a prior cached
 // ## Plan (M2 cache) or by issuing a fresh LLM call. On runner or parse
 // error it returns a non-nil *agentlib.Result carrying AgentStatusFailed
@@ -271,6 +287,7 @@ func (s *planningStep) resolveBumpVerdict(
 	ctx context.Context,
 	bullets []string,
 	currentVersion string,
+	majorAllowed bool,
 	cachedBump, cachedReasoning string,
 ) (prompts.BumpVerdict, *agentlib.Result) {
 	if cachedBump != "" {
@@ -281,6 +298,7 @@ func (s *planningStep) resolveBumpVerdict(
 	versionSection := "\n\n## Current version\n\n" + currentVersion
 	fullPrompt := prompts.BumpClassificationPrompt() +
 		versionSection +
+		majorBumpPolicySection(majorAllowed) +
 		"\n\n## Bullets to classify\n\n" + userMsg
 	runResult, err := s.runner.Run(ctx, fullPrompt)
 	if err != nil {
@@ -313,10 +331,16 @@ func (s *planningStep) runClassification(
 	cachedBump, cachedReasoning string,
 	fetchWarning string,
 ) (*agentlib.Result, error) {
+	// Effective "major allowed" = the target repo's .maintainer.yaml opt-in
+	// OR the per-run --allow-major / ALLOW_MAJOR override. Either one → the
+	// classifier keeps its full major|minor|patch range and no clamp fires.
+	majorAllowed := allowMajorBumpConfig || s.allowMajor
+
 	verdict, result := s.resolveBumpVerdict(
 		ctx,
 		bullets,
 		currentVersion,
+		majorAllowed,
 		cachedBump,
 		cachedReasoning,
 	)
@@ -334,23 +358,28 @@ func (s *planningStep) runClassification(
 		})
 	}
 
-	// Spec 060 major-bump guard. Decision table is enforced inside
-	// applyMajorBumpGuard (see GoDoc on that helper).
-	guardResult, gerr := s.applyMajorBumpGuard(
-		ctx,
-		md,
-		verdict,
-		allowMajorBumpConfig,
-		currentVersion,
-		nextNumeric,
-		prefixStyle,
-		bullets,
-	)
-	if gerr != nil {
-		return nil, gerr
-	}
-	if guardResult != nil {
-		return guardResult, nil
+	// Clamp a disallowed major bump down to minor instead of escalating.
+	// A release never enters human_review solely because a major bump is
+	// not permitted: a would-be major ships as a minor. The injected prompt
+	// policy above guides the LLM to the same result; this code is the
+	// deterministic guarantee even if the LLM returns `major` anyway.
+	if verdict.Bump == "major" && !majorAllowed {
+		clampedNext, cerr := semver.BumpVersion(ctx, currentVersion, "minor")
+		if cerr != nil {
+			glog.V(2).Infof("planning: clamp recompute failed: %v", cerr)
+			return s.escalate(ctx, md, escalation{
+				reason:             cerr.Error(),
+				preconditionFailed: PreconditionBadCurrentVersion,
+				currentVersion:     currentVersion,
+			})
+		}
+		glog.V(2).Infof(
+			"planning: major bump not allowed — clamping major→minor (allowMajorBumpConfig=%t, allowMajorFlag=%t): %s → %s",
+			allowMajorBumpConfig, s.allowMajor, currentVersion, clampedNext,
+		)
+		verdict.Bump = "minor"
+		verdict.Reasoning += " (major bump not permitted — capped to minor)"
+		nextNumeric = clampedNext
 	}
 
 	return s.resolveRewriteAndPublish(
@@ -424,70 +453,6 @@ func (s *planningStep) resolveRewriteAndPublish(
 		changelogRewrite,
 		fetchWarning,
 	)
-}
-
-// applyMajorBumpGuard evaluates the spec 060 decision table on the
-// Claude bump verdict + the two opt-in flag sources (target repo's
-// .maintainer.yaml `release.allowMajorBump` and the per-run
-// `--allow-major` / `ALLOW_MAJOR` CLI flag). The decision table is
-// FROZEN per spec 060 § Desired Behavior 3; any change here MUST
-// update the spec table AND the spec's acceptance criteria first.
-//
-//	| bump  | allowMajorBumpConfig | allowMajor (flag) | result                            |
-//	|-------|----------------------|-------------------|-----------------------------------|
-//	| major | false                | false             | TRIP → NeedsInput (escalate)      |
-//	| major | true                 | *                 | proceed (repo opted in)           |
-//	| major | false                | true              | proceed + glog.V(2) override log  |
-//	| other | *                    | *                 | proceed (no-op for guard)         |
-//
-// On TRIP the function returns the escalation Result (s.escalate
-// writes the needs_input ## Plan block, clears assignee, sets
-// previous_assignee=github-releaser-agent). On proceed it returns
-// (nil, nil) so the caller advances to the rewrite verdict /
-// publishPlan step. The override-path glog line is emitted as a
-// side-effect of the proceed branch (no control-flow impact — it is
-// an audit trail for kubectl-logs greps).
-//
-// The preconditionFailed token on TRIP is the literal
-// "major_bump_not_allowed" (PreconditionMajorBumpNotAllowed);
-// operators grep the task page for that token to find this run.
-func (s *planningStep) applyMajorBumpGuard(
-	ctx context.Context,
-	md *agentlib.Markdown,
-	verdict prompts.BumpVerdict,
-	allowMajorBumpConfig bool,
-	currentVersion, nextNumeric, prefixStyle string,
-	bullets []string,
-) (*agentlib.Result, error) {
-	if verdict.Bump != "major" {
-		return nil, nil
-	}
-	if allowMajorBumpConfig {
-		return nil, nil
-	}
-	if s.allowMajor {
-		// CLI override; repo has not opted in. Log audit line and proceed.
-		glog.V(2).Infof("planning: --allow-major override accepted for major bump")
-		return nil, nil
-	}
-	// TRIP: bump=major, no opt-in from either source.
-	glog.V(2).Infof(
-		"planning: major bump not allowed: bump=major, allowMajorBumpConfig=%t, allowMajorFlag=%t, reasoning=%q",
-		allowMajorBumpConfig, s.allowMajor, verdict.Reasoning,
-	)
-	header := "## " + prefixStyle + nextNumeric
-	return s.escalate(ctx, md, escalation{
-		reason:               "major bump not allowed: " + verdict.Reasoning,
-		preconditionFailed:   PreconditionMajorBumpNotAllowed,
-		currentVersion:       currentVersion,
-		nextVersion:          nextNumeric,
-		nextVersionHeader:    header,
-		bump:                 verdict.Bump,
-		bullets:              bullets,
-		reasoning:            verdict.Reasoning,
-		allowMajorBumpConfig: allowMajorBumpConfig,
-		allowMajorBumpFlag:   s.allowMajor,
-	})
 }
 
 // resolveRewriteVerdict returns the rewrite verdict for the current
