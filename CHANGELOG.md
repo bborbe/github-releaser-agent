@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- fix(security): clear the precommit vulnerability baseline — bump Go 1.26.4 → 1.26.5 (GO-2026-5856, stdlib) and `golang.org/x/text` v0.38.0 → v0.40.0 (CVE-2026-56852); ignore the unfixable `golang.org/x/crypto/openpgp` advisory GO-2026-5932 (`VULNCHECK_IGNORE` + `.trivyignore`, package unmaintained by design).
+
 ## v0.1.1
 
 - refactor: import the shared library from its new root module path `github.com/bborbe/maintainer` (was `github.com/bborbe/maintainer/lib`) and bump to `@v0.45.0`. The maintainer repo flattened `lib/` to its root to match the `bborbe/agent` layout. No behavior change.
