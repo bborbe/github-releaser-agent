@@ -552,17 +552,6 @@ type escalation struct {
 	reason             string
 	preconditionFailed string
 	currentVersion     string
-	// Spec 060 trip-case fields. All optional — P1/P2 escalation
-	// paths pass zero values; the major-bump guard trip case
-	// populates all of them so the operator sees the would-be
-	// release shape on the task page.
-	nextVersion          string
-	nextVersionHeader    string
-	bump                 string
-	bullets              []string
-	reasoning            string
-	allowMajorBumpConfig bool
-	allowMajorBumpFlag   bool
 }
 
 // escalate writes a ## Plan(needs_input) section, clears `assignee`,
@@ -583,17 +572,10 @@ func (s *planningStep) escalate(
 	e escalation,
 ) (*agentlib.Result, error) {
 	output := PlanOutput{
-		Outcome:              PlanOutcomeNeedsInput,
-		Reason:               e.reason,
-		PreconditionFailed:   e.preconditionFailed,
-		CurrentVersion:       e.currentVersion,
-		NextVersion:          e.nextVersion,
-		NextVersionHeader:    e.nextVersionHeader,
-		Bump:                 e.bump,
-		Bullets:              e.bullets,
-		Reasoning:            e.reasoning,
-		AllowMajorBumpConfig: e.allowMajorBumpConfig,
-		AllowMajorBumpFlag:   e.allowMajorBumpFlag,
+		Outcome:            PlanOutcomeNeedsInput,
+		Reason:             e.reason,
+		PreconditionFailed: e.preconditionFailed,
+		CurrentVersion:     e.currentVersion,
 	}
 	section, err := agentlib.MarshalSectionTyped(ctx, "## Plan", output)
 	if err != nil {
