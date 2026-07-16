@@ -141,16 +141,14 @@ var _ = Describe("steps_planning", func() {
 			},
 		)
 
-		// Post-1.0 unchanged-behavior fixture: v1.2.3 + breaking-change
-		// bullet + Claude returns bump=major. The pre-1.0 cap rule does
-		// NOT apply (1.x is post-1.0) so Claude legally returns major.
-		// The spec-060 guard then trips: allowMajorBumpConfig=false
-		// (no .maintainer.yaml), allowMajor=false (per-run override off).
-		// The fixture proves the guard remains intact for post-1.0 — a
-		// future maintainer cannot "helpfully" extend the cap to 1.x
-		// without breaking this test.
+		// Post-1.0 fixture: v1.2.3 + breaking-change bullet + Claude
+		// returns bump=major. The pre-1.0 cap does NOT apply (1.x is
+		// post-1.0) so Claude legally returns major. With neither opt-in
+		// present (allowMajorBumpConfig=false, allowMajor=false) the
+		// disallowed major is CLAMPED to minor and the release ships —
+		// it does not escalate to human_review.
 		It(
-			"post-1.0 v1.2.3 + breaking-change bullet + Claude returns major: still trips guard, outcome=needs_input",
+			"post-1.0 v1.2.3 + breaking-change bullet + Claude returns major, major not allowed: clamps to minor (no escalation)",
 			func() {
 				post1Changelog := []byte(
 					"## Unreleased\n\n" +
@@ -194,26 +192,28 @@ var _ = Describe("steps_planning", func() {
 				result, err := step.Run(context.Background(), md)
 				Expect(err).NotTo(HaveOccurred())
 
-				// Status: NeedsInput (the spec-060 trip contract).
-				Expect(result.Status).To(Equal(agentlib.AgentStatusNeedsInput))
+				// Status: Done, advancing to execution — the clamp ships
+				// the release instead of escalating to human_review.
+				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+				Expect(result.NextPhase).To(Equal("execution"))
 
-				// ## Plan JSON: outcome + precondition + audit-trail flags.
+				// ## Plan JSON: the would-be major is capped to minor.
 				plan, err := agentlib.ExtractSection[pkg.PlanOutput](
 					context.Background(), md, "## Plan",
 				)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(plan.Outcome).To(Equal(pkg.PlanOutcomeNeedsInput))
-				Expect(plan.PreconditionFailed).To(Equal(pkg.PreconditionMajorBumpNotAllowed))
+				Expect(plan.Outcome).To(Equal(pkg.PlanOutcomeReady))
+				Expect(plan.Bump).To(Equal("minor"))
+				Expect(plan.NextVersion).To(Equal("1.3.0"))
 
-				// FROZEN spec-047 frontmatter mutations.
+				// No escalation: assignee is NOT cleared and
+				// previous_assignee is NOT set.
 				gotAssignee, _ := md.Frontmatter.String("assignee")
-				Expect(gotAssignee).To(Equal(""))
+				Expect(gotAssignee).To(Equal("github-releaser-agent"))
 				gotPrevAssignee, _ := md.Frontmatter.String("previous_assignee")
-				Expect(gotPrevAssignee).To(Equal("github-releaser-agent"))
+				Expect(gotPrevAssignee).To(Equal(""))
 				gotStatus, _ := md.Frontmatter.String("status")
 				Expect(gotStatus).To(Equal("in_progress"))
-				gotPhase, _ := md.Frontmatter.String("phase")
-				Expect(gotPhase).To(Equal("planning"))
 			},
 		)
 	})
@@ -277,6 +277,115 @@ var _ = Describe("steps_planning", func() {
 				Expect(currentVersionIdx).To(BeNumerically(">", rulesIdx))
 			},
 		)
+	})
+
+	Context("major-bump policy injection + clamp (classifier-clamp)", func() {
+		It("major not allowed: injects the forbid-major policy into the prompt", func() {
+			fakeFetcher := &mocks.Fetcher{}
+			fakeFetcher.FetchReturns(
+				[]byte(
+					"## Unreleased\n\n- refactor(lib): rename Foo → Bar\n\n## v1.2.3\n\n- old\n",
+				),
+				nil,
+			)
+			fakeRunner := &mocks.ClaudeRunnerMock{}
+			fakeRunner.RunReturns(&claudelib.ClaudeResult{
+				Result: `{"bump":"minor","reasoning":"capped"}`,
+			}, nil)
+
+			step := pkg.NewPlanningStep(
+				fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, false,
+			)
+
+			taskMD := "---\nstatus: in_progress\nphase: planning\nassignee: github-releaser-agent\ntask_type: github-release\nrepo: bborbe/lib\nclone_url: https://github.com/bborbe/lib.git\nref: master\ncurrent_version: v1.2.3\ntask_identifier: gh-release-bborbe-lib-001\n---\n\n# release task\n"
+			md, err := agentlib.ParseMarkdown(context.Background(), taskMD)
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = step.Run(context.Background(), md)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(fakeRunner.RunCallCount()).To(Equal(1))
+			_, promptArg := fakeRunner.RunArgsForCall(0)
+			Expect(promptArg).To(ContainSubstring("## Major-bump policy"))
+			Expect(promptArg).To(ContainSubstring("MUST NOT return `major`"))
+		})
+
+		It("major allowed (per-run override): omits the policy and publishes major", func() {
+			fakeFetcher := &mocks.Fetcher{}
+			fakeFetcher.FetchReturns(
+				[]byte(
+					"## Unreleased\n\n- refactor(lib): rename Foo → Bar\n\n## v1.2.3\n\n- old\n",
+				),
+				nil,
+			)
+			fakeRunner := &mocks.ClaudeRunnerMock{}
+			fakeRunner.RunReturns(&claudelib.ClaudeResult{
+				Result: `{"bump":"major","reasoning":"BREAKING CHANGE: rename Foo"}`,
+			}, nil)
+
+			// allowMajor=true (per-run override) → full range, no clamp.
+			step := pkg.NewPlanningStep(
+				fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, true,
+			)
+
+			taskMD := "---\nstatus: in_progress\nphase: planning\nassignee: github-releaser-agent\ntask_type: github-release\nrepo: bborbe/lib\nclone_url: https://github.com/bborbe/lib.git\nref: master\ncurrent_version: v1.2.3\ntask_identifier: gh-release-bborbe-lib-002\n---\n\n# release task\n"
+			md, err := agentlib.ParseMarkdown(context.Background(), taskMD)
+			Expect(err).NotTo(HaveOccurred())
+
+			result, err := step.Run(context.Background(), md)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(fakeRunner.RunCallCount()).To(Equal(1))
+			_, promptArg := fakeRunner.RunArgsForCall(0)
+			Expect(promptArg).NotTo(ContainSubstring("## Major-bump policy"))
+
+			Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+			plan, err := agentlib.ExtractSection[pkg.PlanOutput](
+				context.Background(), md, "## Plan",
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(plan.Bump).To(Equal("major"))
+			Expect(plan.NextVersion).To(Equal("2.0.0"))
+		})
+
+		It("major allowed (repo YAML opt-in): omits the policy and publishes major", func() {
+			fakeFetcher := &mocks.Fetcher{}
+			fakeFetcher.FetchReturns(
+				[]byte(
+					"## Unreleased\n\n- refactor(lib): rename Foo → Bar\n\n## v1.2.3\n\n- old\n",
+				),
+				nil,
+			)
+			fakeRunner := &mocks.ClaudeRunnerMock{}
+			fakeRunner.RunReturns(&claudelib.ClaudeResult{
+				Result: `{"bump":"major","reasoning":"BREAKING CHANGE: rename Foo"}`,
+			}, nil)
+
+			// Repo opt-in via .maintainer.yaml (release.allowMajorBump: true);
+			// per-run override OFF → config alone permits the full range.
+			maintainerFetcher := &mocks.MaintainerConfigFetcher{}
+			maintainerFetcher.FetchReturns([]byte("release:\n  allowMajorBump: true\n"), nil)
+			step := pkg.NewPlanningStep(fakeRunner, fakeFetcher, maintainerFetcher, false)
+
+			taskMD := "---\nstatus: in_progress\nphase: planning\nassignee: github-releaser-agent\ntask_type: github-release\nrepo: bborbe/lib\nclone_url: https://github.com/bborbe/lib.git\nref: master\ncurrent_version: v1.2.3\ntask_identifier: gh-release-bborbe-lib-003\n---\n\n# release task\n"
+			md, err := agentlib.ParseMarkdown(context.Background(), taskMD)
+			Expect(err).NotTo(HaveOccurred())
+
+			result, err := step.Run(context.Background(), md)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(fakeRunner.RunCallCount()).To(Equal(1))
+			_, promptArg := fakeRunner.RunArgsForCall(0)
+			Expect(promptArg).NotTo(ContainSubstring("## Major-bump policy"))
+
+			Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+			plan, err := agentlib.ExtractSection[pkg.PlanOutput](
+				context.Background(), md, "## Plan",
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(plan.Bump).To(Equal("major"))
+			Expect(plan.NextVersion).To(Equal("2.0.0"))
+		})
 	})
 
 	Describe("PlanningStep", func() {
@@ -1556,14 +1665,14 @@ var _ = Describe("steps_planning", func() {
 				},
 			)
 
-			// spec 060 — major-bump guard. Decision table (FROZEN):
-			//   bump=major + allowMajorBumpConfig==true  → proceed
-			//   bump=major + per-run allowMajor==true     → proceed (CLI override)
-			//   bump=major + neither                      → TRIP (NeedsInput, escalate)
+			// major-bump range clamp (classifier-clamp). Decision table:
+			//   bump=major + allowMajorBumpConfig==true  → proceed (major)
+			//   bump=major + per-run allowMajor==true     → proceed (major, CLI override)
+			//   bump=major + neither                      → CLAMP major→minor (ship as minor)
 			//   bump=patch/minor (any)                    → proceed (no-op)
-			// Trip case: planning step must write ## Plan(outcome=needs_input,
-			// precondition_failed=major_bump_not_allowed) AND mutate the
-			// frontmatter per the FROZEN spec 047 escalation contract.
+			// Clamp case: planning step writes ## Plan(outcome=ready, bump=minor)
+			// and advances to execution — it does NOT escalate to human_review
+			// or clear the assignee.
 			Context("major-bump guard (spec 060)", func() {
 				// Trip-case CHANGELOG: contains the literal regression bullet from
 				// the originating incident (spec 060 § Problem). A prefix-only
@@ -1579,7 +1688,7 @@ var _ = Describe("steps_planning", func() {
 				)
 
 				It(
-					"major bump trips guard when neither opt-in present",
+					"major bump clamps to minor when neither opt-in present",
 					func() {
 						// Default-mock maintainerConfigFetcher → (nil, nil) →
 						// Parse(empty) → cfg.Release.AllowMajorBump=false.
@@ -1612,34 +1721,34 @@ var _ = Describe("steps_planning", func() {
 						result, err := step.Run(context.Background(), md)
 						Expect(err).NotTo(HaveOccurred())
 
-						// (a) Status: NeedsInput
-						Expect(result.Status).To(Equal(agentlib.AgentStatusNeedsInput))
+						// (a) Status: Done, advancing to execution — clamped,
+						// not escalated.
+						Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+						Expect(result.NextPhase).To(Equal("execution"))
 
-						// (b,c,d) ## Plan JSON: outcome + precondition + audit-trail flags
+						// (b,c,d) ## Plan JSON: the disallowed major is capped
+						// to minor and the release ships.
 						plan, err := agentlib.ExtractSection[pkg.PlanOutput](
 							context.Background(),
 							md,
 							"## Plan",
 						)
 						Expect(err).NotTo(HaveOccurred())
-						Expect(plan.Outcome).To(Equal("needs_input"))
-						Expect(plan.PreconditionFailed).To(Equal("major_bump_not_allowed"))
-						Expect(plan.AllowMajorBumpConfig).To(BeFalse())
-						Expect(plan.AllowMajorBumpFlag).To(BeFalse())
+						Expect(plan.Outcome).To(Equal("ready"))
+						Expect(plan.Bump).To(Equal("minor"))
+						Expect(plan.NextVersion).To(Equal("1.8.0"))
 
-						// (e) FROZEN spec 047 escalation contract
+						// (e) No escalation: assignee NOT cleared,
+						// previous_assignee NOT set.
 						gotAssignee, _ := md.Frontmatter.String("assignee")
-						Expect(gotAssignee).To(Equal(""))
+						Expect(gotAssignee).To(Equal("github-releaser-agent"))
 						gotPrevAssignee, _ := md.Frontmatter.String("previous_assignee")
-						Expect(gotPrevAssignee).To(Equal("github-releaser-agent"))
+						Expect(gotPrevAssignee).To(Equal(""))
 						gotStatus, _ := md.Frontmatter.String("status")
 						Expect(gotStatus).To(Equal("in_progress"))
-						gotPhase, _ := md.Frontmatter.String("phase")
-						Expect(gotPhase).To(Equal("planning"))
 
-						// Bonus: the escalation reason carries the substring
-						// that kubectl-logs greps will surface.
-						Expect(plan.Reason).To(ContainSubstring("major bump not allowed"))
+						// The clamp annotates the reasoning for the audit trail.
+						Expect(plan.Reasoning).To(ContainSubstring("capped to minor"))
 					},
 				)
 

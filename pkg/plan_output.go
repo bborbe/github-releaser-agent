@@ -76,19 +76,6 @@ type PlanOutput struct {
 	// path (404 → ErrFileNotFound).
 	ConfigFetchWarning string `json:"config_fetch_warning,omitempty"`
 
-	// AllowMajorBumpConfig records the spec-060 per-repo YAML opt-in flag
-	// value resolved at planning entry. Populated on outcome=needs_input
-	// (trip case) so the operator can see which lever to flip. NOT
-	// populated on outcome=ready (the happy path does not need an audit
-	// trail) — omitempty removes the token from the JSON.
-	AllowMajorBumpConfig bool `json:"allow_major_bump_config,omitempty"`
-
-	// AllowMajorBumpFlag records the spec-060 per-run CLI override value
-	// resolved at planning entry. Same shape and contract as
-	// AllowMajorBumpConfig — populated on the trip case only, omitted
-	// from JSON on the happy path.
-	AllowMajorBumpFlag bool `json:"allow_major_bump_flag,omitempty"`
-
 	// ErrorCategory names the failure category on outcome="failed". For
 	// spec 059 the only value is "invalid_config" (release.changelogRewrite
 	// is non-boolean). Future failure categories may extend this set.
@@ -132,11 +119,4 @@ const (
 	// precondition values; planning code appends the field name, e.g.
 	// "missing_frontmatter_clone_url".
 	PreconditionMissingFrontmatter = "missing_frontmatter_"
-	// PreconditionMajorBumpNotAllowed is set on the trip case of the
-	// spec-060 major-bump guard. Trip condition: bump=major AND
-	// cfg.Release.AllowMajorBump==false AND the per-run CLI override
-	// is unset. The escalation block carries the classifier's reasoning
-	// and the resolved values of both opt-in levers so the operator
-	// can see which lever to flip.
-	PreconditionMajorBumpNotAllowed = "major_bump_not_allowed"
 )
