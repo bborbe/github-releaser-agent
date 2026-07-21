@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [001-bug-stale-current-version-collision]
+summary: Added fix(planning) changelog entry for spec-001 plan-time current_version resolution; make precommit passed
+execution_id: github-releaser-agent-plantime-version-exec-003-spec-001-changelog-precommit
+dark-factory-version: dev
 created: "2026-07-21T16:42:00Z"
 queued: "2026-07-21T16:52:52Z"
+started: "2026-07-21T17:31:50Z"
+completed: "2026-07-21T17:32:59Z"
 branch: dark-factory/bug-stale-current-version-collision
 ---
 

@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - feat: Add `pkg/githubtags` package — read-only GitHub REST API fetcher that returns the highest-semver tag from a repository's tag list, with pagination across all pages, `ErrNoTags` sentinel for empty/non-semver repos, and full counterfeiter mock
 - feat: Add `semver.IsValid(v string) bool` and `semver.Highest(names []string) (string, bool)` pure-Go helpers for strict three-component semver validation and numeric comparison
 - feat(planning): resolve `current_version` from the target repo's highest remote semver tag at plan time (spec 001), falling back to the emit-time snapshot only on no-tags or transient-error — fixes the stale-snapshot collision that silently dropped releases
+- fix(planning): resolve `current_version` from the target repo's latest remote semver tag at plan time instead of the emit-time frontmatter snapshot, so a repo tagged between task emit and run (e.g. a second release cut for a different `## Unreleased` item) bumps above the true latest tag and cuts the correct next version rather than colliding with an existing tag and dropping the release as `superseded`. On zero remote tags (fresh repo) planning falls back to the snapshot cleanly; on a transient tag-fetch error it degrades to the snapshot and surfaces a non-fatal warning on the `## Plan` block — never fail-closed. The missing-`current_version` escalation contract is unchanged.
 
 ## v0.2.0
 
