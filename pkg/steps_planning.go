@@ -15,6 +15,7 @@ import (
 	"github.com/bborbe/errors"
 	"github.com/bborbe/github-releaser-agent/pkg/changelog"
 	"github.com/bborbe/github-releaser-agent/pkg/githubchangelog"
+	"github.com/bborbe/github-releaser-agent/pkg/githubtags"
 	"github.com/bborbe/github-releaser-agent/pkg/maintainerconfig"
 	"github.com/bborbe/github-releaser-agent/pkg/prompts"
 	"github.com/bborbe/github-releaser-agent/pkg/semver"
@@ -46,25 +47,30 @@ type planningStep struct {
 	runner           claudelib.ClaudeRunner
 	fetcher          githubchangelog.Fetcher
 	maintainerConfig maintainerconfig.Fetcher
+	tagsFetcher      githubtags.TagsFetcher
 	allowMajor       bool
 }
 
-// NewPlanningStep wires the planning step with its four IO seams:
+// NewPlanningStep wires the planning step with its five IO seams:
 //   - the Claude runner (LLM verdict for bump + rewrite)
 //   - the CHANGELOG.md fetcher (GitHub contents API)
 //   - the .maintainer.yaml fetcher (GitHub contents API, spec 059)
 //   - the spec-060 per-run override: when true, the major-bump guard
 //     is bypassed; equivalent to cfg.Release.AllowMajorBump==true.
+//   - the GitHub tags fetcher (spec 001: resolves current_version from
+//     the remote's highest semver tag at plan time).
 func NewPlanningStep(
 	runner claudelib.ClaudeRunner,
 	fetcher githubchangelog.Fetcher,
 	maintainerConfig maintainerconfig.Fetcher,
+	tagsFetcher githubtags.TagsFetcher,
 	allowMajor bool,
 ) agentlib.Step {
 	return &planningStep{
 		runner:           runner,
 		fetcher:          fetcher,
 		maintainerConfig: maintainerConfig,
+		tagsFetcher:      tagsFetcher,
 		allowMajor:       allowMajor,
 	}
 }
@@ -79,19 +85,9 @@ func (s *planningStep) ShouldRun(_ context.Context, _ *agentlib.Markdown) (bool,
 	return true, nil
 }
 
-// Run executes the planning pipeline. Eight outcomes:
-//  1. Missing frontmatter        → escalate (NeedsInput, ## Plan needs_input, clear assignee)
-//  2. CHANGELOG fetch fails      → Failed (controller retries)
-//  3. P1/P2 validation fails     → escalate
-//  4. Claude verdict unparseable → Failed (controller retries)
-//  5. semver.BumpVersion fails   → escalate
-//  6. Resolve release.changelogRewrite from .maintainer.yaml at the ref's tip
-//     - ErrFileNotFound or any fetch transport error → treat as false, log V(2), continue
-//     - Parse error containing "unmarshal" → fail-closed (outcome=failed, error_category=invalid_config)
-//     - Resolved true  → run rewrite LLM call (existing 058 path)
-//     - Resolved false → SKIP rewrite LLM call, set plan.ChangelogRewrite=ptr(false), plan.RewriteNeeded=false
-//  7. Rewrite LLM call (only if step 6 returned true)
-//  8. Happy path                 → Done, NextPhase = execution, ## Plan ready
+// Run executes the planning pipeline: read frontmatter, fetch CHANGELOG,
+// validate, classify bump (spec 001/063), resolve changelogRewrite (spec 059),
+// optionally rewrite (spec 058), publish ## Plan.
 func (s *planningStep) Run(ctx context.Context, md *agentlib.Markdown) (*agentlib.Result, error) {
 	missingField, currentVersion, repo, cloneURL, ref := s.readRequired(md)
 	if missingField != "" {
@@ -114,6 +110,10 @@ func (s *planningStep) Run(ctx context.Context, md *agentlib.Markdown) (*agentli
 	}
 	_ = cloneURL // currently unused by planning; future execution step will use it
 
+	// spec 001: resolve the effective current_version from the remote's
+	// highest semver tag. The frontmatter snapshot is the fallback.
+	effectiveVersion, tagWarning, _ := s.resolveCurrentVersion(ctx, owner, name, currentVersion)
+
 	cachedBump, cachedReasoning := s.readCachedBump(ctx, md)
 
 	changelogBytes, err := s.fetcher.Fetch(ctx, owner, name, ref)
@@ -126,7 +126,6 @@ func (s *planningStep) Run(ctx context.Context, md *agentlib.Markdown) (*agentli
 	}
 	glog.V(2).
 		Infof("planning: fetched CHANGELOG.md owner=%s name=%s ref=%s bytes=%d", owner, name, ref, len(changelogBytes))
-
 	valid, reason, _ := changelog.ValidateUnreleased(changelogBytes)
 	if !valid {
 		precondition := classifyValidationFailure(reason)
@@ -138,7 +137,6 @@ func (s *planningStep) Run(ctx context.Context, md *agentlib.Markdown) (*agentli
 			currentVersion:     currentVersion,
 		})
 	}
-
 	bullets := changelog.ExtractUnreleasedBullets(changelogBytes)
 	prefixStyle := changelog.InferHeaderPrefixStyle(changelogBytes)
 	originalBody, err := changelog.ExtractUnreleasedBody(ctx, changelogBytes)
@@ -149,8 +147,7 @@ func (s *planningStep) Run(ctx context.Context, md *agentlib.Markdown) (*agentli
 			Message: "extract unreleased body: " + err.Error(),
 		}, nil
 	}
-
-	changelogRewrite, allowMajorBump, fetchWarning, err := s.resolveMaintainerConfig(
+	changelogRewrite, allowMajorBump, configWarning, err := s.resolveMaintainerConfig(
 		ctx,
 		owner,
 		name,
@@ -162,10 +159,16 @@ func (s *planningStep) Run(ctx context.Context, md *agentlib.Markdown) (*agentli
 		// block, set the controller to human_review, do NOT advance.
 		return s.failInvalidConfig(ctx, md, currentVersion, "release.changelogRewrite", err)
 	}
+
+	// Merge tag-fetch and config-fetch warnings so both are grep-able
+	// on the plan block. Join with "; " when both non-empty; use whichever
+	// is non-empty when only one is; empty when neither.
+	fetchWarning := joinWarnings(configWarning, tagWarning)
+
 	return s.runClassification(
 		ctx,
 		md,
-		currentVersion,
+		effectiveVersion,
 		bullets,
 		prefixStyle,
 		originalBody,
@@ -175,6 +178,19 @@ func (s *planningStep) Run(ctx context.Context, md *agentlib.Markdown) (*agentli
 		cachedReasoning,
 		fetchWarning,
 	)
+}
+
+// joinWarnings merges two non-fatal warning strings. Returns the non-empty
+// one when only one is set, joins with "; " when both are non-empty, and
+// returns "" when neither is set.
+func joinWarnings(a, b string) string {
+	if a == "" {
+		return b
+	}
+	if b == "" {
+		return a
+	}
+	return a + "; " + b
 }
 
 // readCachedBump returns the bump verdict from a prior partial run (e.g.
@@ -261,6 +277,49 @@ func (s *planningStep) resolveMaintainerConfig(
 		return false, false, "", errors.Wrapf(ctx, err, "parse .maintainer.yaml")
 	}
 	return cfg.Release.ChangelogRewrite, cfg.Release.AllowMajorBump, "", nil
+}
+
+// resolveCurrentVersion returns the effective current_version to bump from,
+// resolving it from the target repo's highest remote semver tag at plan
+// time (spec 001). The frontmatter snapshot is used ONLY as a fallback.
+// Fallback semantics mirror resolveMaintainerConfig:
+//
+//   - Remote has a semver tag        → (remoteTag, "", nil)   // remote wins; prefix preserved
+//   - Remote has no usable tag       → (snapshot, "", nil)    // ErrNoTags → clean fallback, V(2) only, no warning
+//   - Transient fetch error (5xx/net)→ (snapshot, "<warn>", nil) // degrade, surface non-fatal warning; do NOT fail-closed
+//
+// The middle return is a non-fatal warning surfaced on PlanOutput.ConfigFetchWarning
+// so an operator can grep a repo whose release bumped from the (possibly stale)
+// snapshot on a transient GitHub flake. Empty on the remote-wins and clean-no-tags paths.
+//
+//nolint:unparam // err is always nil; kept for API symmetry with resolveMaintainerConfig.
+func (s *planningStep) resolveCurrentVersion(
+	ctx context.Context,
+	owner, name, snapshot string,
+) (effective string, fetchWarning string, err error) {
+	latest, ferr := s.tagsFetcher.LatestSemverTag(ctx, owner, name)
+	if ferr != nil {
+		if stderrors.Is(ferr, githubtags.ErrNoTags) {
+			glog.V(2).Infof(
+				"planning: no remote tags for %s/%s — using snapshot current_version=%s",
+				owner, name, snapshot,
+			)
+			return snapshot, "", nil
+		}
+		glog.Warningf(
+			"planning: remote tag fetch failed for %s/%s (using snapshot %s): %v",
+			owner, name, snapshot, ferr,
+		)
+		return snapshot, fmt.Sprintf(
+			"remote tag lookup failed (using snapshot current_version=%s): %s",
+			snapshot, ferr.Error(),
+		), nil
+	}
+	glog.V(2).Infof(
+		"planning: resolved current_version from remote latest tag %s/%s: %s (snapshot was %s)",
+		owner, name, latest, snapshot,
+	)
+	return latest, "", nil
 }
 
 // majorBumpPolicySection returns the runtime-injected classifier policy for

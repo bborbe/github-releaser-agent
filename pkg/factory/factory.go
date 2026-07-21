@@ -19,6 +19,7 @@ import (
 	"github.com/bborbe/github-releaser-agent/pkg/git"
 	"github.com/bborbe/github-releaser-agent/pkg/githubchangelog"
 	"github.com/bborbe/github-releaser-agent/pkg/githubreview"
+	"github.com/bborbe/github-releaser-agent/pkg/githubtags"
 	"github.com/bborbe/github-releaser-agent/pkg/maintainerconfig"
 	libkafka "github.com/bborbe/kafka"
 	libtime "github.com/bborbe/time"
@@ -112,10 +113,12 @@ func CreateAgent(
 	planningRunner := CreateClaudeRunner(claudeConfigDir, agentDir, model, env, planningTools)
 	fetcher := githubchangelog.NewHTTPFetcher(ghToken)
 	maintainerConfigFetcher := maintainerconfig.NewHTTPFetcher(ghToken)
+	tagsFetcher := githubtags.NewHTTPTagsFetcher(ghToken)
 	planningStep := releaserpkg.NewPlanningStep(
 		planningRunner,
 		fetcher,
 		maintainerConfigFetcher,
+		tagsFetcher,
 		allowMajor,
 	)
 

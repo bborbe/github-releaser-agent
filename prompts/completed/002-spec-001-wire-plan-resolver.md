@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [001-bug-stale-current-version-collision]
+summary: 'Wired pkg/githubtags TagsFetcher into planningStep to resolve current_version from remote latest semver tag at plan time (spec 001), with three-way fallback: remote tag wins, ErrNoTags clean fallback, transient error fallback with warning'
+execution_id: github-releaser-agent-plantime-version-exec-002-spec-001-wire-plan-resolver
+dark-factory-version: dev
 created: "2026-07-21T16:41:00Z"
 queued: "2026-07-21T16:52:51Z"
+started: "2026-07-21T17:17:28Z"
+completed: "2026-07-21T17:31:49Z"
 branch: dark-factory/bug-stale-current-version-collision
 ---
 
