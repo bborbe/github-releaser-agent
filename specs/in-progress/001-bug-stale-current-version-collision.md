@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-07-21T16:30:46Z"
 generating: "2026-07-21T16:32:44Z"
 prompted: "2026-07-21T16:41:38Z"
+verifying: "2026-07-21T17:32:59Z"
 branch: dark-factory/bug-stale-current-version-collision
 ---
 
