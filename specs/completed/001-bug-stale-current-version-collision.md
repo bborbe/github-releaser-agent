@@ -1,9 +1,10 @@
 ---
-status: verifying
+status: completed
 approved: "2026-07-21T16:30:46Z"
 generating: "2026-07-21T16:32:44Z"
 prompted: "2026-07-21T16:41:38Z"
 verifying: "2026-07-21T17:32:59Z"
+completed: "2026-07-21T19:56:59Z"
 branch: dark-factory/bug-stale-current-version-collision
 ---
 
@@ -104,29 +105,29 @@ has tags.
 
 ## Acceptance Criteria
 
-- [ ] A new read-only tags fetcher (e.g. `pkg/githubtags`) exposes an
+- [x] A new read-only tags fetcher (e.g. `pkg/githubtags`) exposes an
       interface returning the target repo's latest semver tag, backed by the
       GitHub REST tags API, with a counterfeiter mock — mirroring
       `pkg/githubchangelog`. Evidence: `grep -n counterfeiter pkg/githubtags/*.go`
       returns ≥1; the interface method is present.
-- [ ] `steps_planning.go` resolves the effective `current_version` from that
+- [x] `steps_planning.go` resolves the effective `current_version` from that
       fetcher at plan entry (before `semver.BumpVersion`), using the
       frontmatter snapshot only on no-tags / transient-error fallback.
       Evidence: covered by AC #3 (the observable is the computed next version).
-- [ ] Given a repo whose remote latest tag is `v0.101.1` and a task
+- [x] Given a repo whose remote latest tag is `v0.101.1` and a task
       frontmatter `current_version: v0.101.0`, planning computes the bump from
       `v0.101.1` (→ `v0.101.2` for a patch), NOT from `v0.101.0`. Covered by a
       Ginkgo test with a fake tags fetcher + fake `ClaudeRunner`.
-- [ ] No-tags fallback: a fake fetcher returning "no tags" makes planning use
+- [x] No-tags fallback: a fake fetcher returning "no tags" makes planning use
       the frontmatter snapshot with no warning (`V(2)` log only). Test present.
-- [ ] Transient-error fallback: a fake fetcher returning a 5xx/transport error
+- [x] Transient-error fallback: a fake fetcher returning a 5xx/transport error
       makes planning use the snapshot AND surface a non-fatal warning on the
       `## Plan` block. Test present.
-- [ ] The escalation path for a genuinely-missing `current_version` (empty
+- [x] The escalation path for a genuinely-missing `current_version` (empty
       frontmatter AND no remote tags) is unchanged — still `NeedsInput` with
       `previous_assignee: github-releaser-agent`. Test present.
-- [ ] `make precommit` passes (fmt, generate, test, lint, vet, vuln, license).
-- [ ] `CHANGELOG.md` has an entry under `## Unreleased` describing the
+- [x] `make precommit` passes (fmt, generate, test, lint, vet, vuln, license).
+- [x] `CHANGELOG.md` has an entry under `## Unreleased` describing the
       plan-time version resolution fix.
 
 ## Failure modes the fix must cover
