@@ -17,6 +17,7 @@ import (
 	"github.com/bborbe/github-releaser-agent/mocks"
 	pkg "github.com/bborbe/github-releaser-agent/pkg"
 	"github.com/bborbe/github-releaser-agent/pkg/factory"
+	"github.com/bborbe/github-releaser-agent/pkg/githubtags"
 	"github.com/bborbe/github-releaser-agent/pkg/maintainerconfig"
 	domain "github.com/bborbe/vault-cli/pkg/domain"
 	. "github.com/onsi/ginkgo/v2"
@@ -33,6 +34,15 @@ func withChangelogRewriteTrue() *mocks.MaintainerConfigFetcher {
 		[]byte("release:\n  changelogRewrite: true\n"),
 		nil,
 	)
+	return m
+}
+
+// withNoRemoteTags returns a TagsFetcher mock that reports no usable
+// remote tag, so the planning step falls back to the frontmatter
+// snapshot — preserving pre-spec-001 test expectations.
+func withNoRemoteTags() *mocks.TagsFetcher {
+	m := &mocks.TagsFetcher{}
+	m.LatestSemverTagReturns("", githubtags.ErrNoTags)
 	return m
 }
 
@@ -90,6 +100,7 @@ var _ = Describe("steps_planning", func() {
 					fakeRunner,
 					fakeFetcher,
 					&mocks.MaintainerConfigFetcher{},
+					withNoRemoteTags(),
 					false,
 				)
 
@@ -170,6 +181,7 @@ var _ = Describe("steps_planning", func() {
 					fakeRunner,
 					fakeFetcher,
 					&mocks.MaintainerConfigFetcher{},
+					withNoRemoteTags(),
 					false,
 				)
 
@@ -239,6 +251,7 @@ var _ = Describe("steps_planning", func() {
 					fakeRunner,
 					fakeFetcher,
 					&mocks.MaintainerConfigFetcher{},
+					withNoRemoteTags(),
 					false,
 				)
 
@@ -294,7 +307,11 @@ var _ = Describe("steps_planning", func() {
 			}, nil)
 
 			step := pkg.NewPlanningStep(
-				fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, false,
+				fakeRunner,
+				fakeFetcher,
+				&mocks.MaintainerConfigFetcher{},
+				withNoRemoteTags(),
+				false,
 			)
 
 			taskMD := "---\nstatus: in_progress\nphase: planning\nassignee: github-releaser-agent\ntask_type: github-release\nrepo: bborbe/lib\nclone_url: https://github.com/bborbe/lib.git\nref: master\ncurrent_version: v1.2.3\ntask_identifier: gh-release-bborbe-lib-001\n---\n\n# release task\n"
@@ -325,7 +342,7 @@ var _ = Describe("steps_planning", func() {
 
 			// allowMajor=true (per-run override) → full range, no clamp.
 			step := pkg.NewPlanningStep(
-				fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, true,
+				fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, withNoRemoteTags(), true,
 			)
 
 			taskMD := "---\nstatus: in_progress\nphase: planning\nassignee: github-releaser-agent\ntask_type: github-release\nrepo: bborbe/lib\nclone_url: https://github.com/bborbe/lib.git\nref: master\ncurrent_version: v1.2.3\ntask_identifier: gh-release-bborbe-lib-002\n---\n\n# release task\n"
@@ -365,7 +382,13 @@ var _ = Describe("steps_planning", func() {
 			// per-run override OFF → config alone permits the full range.
 			maintainerFetcher := &mocks.MaintainerConfigFetcher{}
 			maintainerFetcher.FetchReturns([]byte("release:\n  allowMajorBump: true\n"), nil)
-			step := pkg.NewPlanningStep(fakeRunner, fakeFetcher, maintainerFetcher, false)
+			step := pkg.NewPlanningStep(
+				fakeRunner,
+				fakeFetcher,
+				maintainerFetcher,
+				withNoRemoteTags(),
+				false,
+			)
 
 			taskMD := "---\nstatus: in_progress\nphase: planning\nassignee: github-releaser-agent\ntask_type: github-release\nrepo: bborbe/lib\nclone_url: https://github.com/bborbe/lib.git\nref: master\ncurrent_version: v1.2.3\ntask_identifier: gh-release-bborbe-lib-003\n---\n\n# release task\n"
 			md, err := agentlib.ParseMarkdown(context.Background(), taskMD)
@@ -406,6 +429,7 @@ var _ = Describe("steps_planning", func() {
 					fakeRunner,
 					fakeFetcher,
 					&mocks.MaintainerConfigFetcher{},
+					withNoRemoteTags(),
 					false, // spec 060: per-run allowMajor; false unless the test exercises the override path.
 				)
 				// maintainerConfigFetcher mock returns nil/nil by default — yields changelogRewrite=false via Parse(empty) contract.
@@ -452,6 +476,7 @@ var _ = Describe("steps_planning", func() {
 						fakeRunner,
 						fakeFetcher,
 						&mocks.MaintainerConfigFetcher{},
+						withNoRemoteTags(),
 						false, // spec 060
 					)
 					// maintainerConfigFetcher mock returns nil/nil by default — never reached on P1 escalation.
@@ -503,6 +528,7 @@ var _ = Describe("steps_planning", func() {
 						fakeRunner,
 						fakeFetcher,
 						&mocks.MaintainerConfigFetcher{},
+						withNoRemoteTags(),
 						false, // spec 060
 					)
 					// maintainerConfigFetcher mock returns nil/nil by default — never reached on missing-frontmatter.
@@ -537,6 +563,7 @@ var _ = Describe("steps_planning", func() {
 					fakeRunner,
 					fakeFetcher,
 					&mocks.MaintainerConfigFetcher{},
+					withNoRemoteTags(),
 					false, // spec 060
 				)
 				// maintainerConfigFetcher mock returns nil/nil by default — never reached on CHANGELOG fetch error.
@@ -562,6 +589,7 @@ var _ = Describe("steps_planning", func() {
 					fakeRunner,
 					fakeFetcher,
 					&mocks.MaintainerConfigFetcher{},
+					withNoRemoteTags(),
 					false, // spec 060
 				)
 				// maintainerConfigFetcher mock returns nil/nil by default — yields changelogRewrite=false (no rewrite call).
@@ -592,6 +620,7 @@ var _ = Describe("steps_planning", func() {
 						fakeRunner,
 						fakeFetcher,
 						&mocks.MaintainerConfigFetcher{},
+						withNoRemoteTags(),
 						false, // spec 060
 					)
 					// maintainerConfigFetcher mock returns nil/nil by default — never reached on bad current_version (escalation after bump).
@@ -625,6 +654,7 @@ var _ = Describe("steps_planning", func() {
 						fakeRunner,
 						fakeFetcher,
 						&mocks.MaintainerConfigFetcher{},
+						withNoRemoteTags(),
 						false, // spec 060
 					)
 					// maintainerConfigFetcher mock returns nil/nil by default — never reached on P2 escalation.
@@ -662,6 +692,7 @@ var _ = Describe("steps_planning", func() {
 					fakeRunner,
 					fakeFetcher,
 					&mocks.MaintainerConfigFetcher{},
+					withNoRemoteTags(),
 					false, // spec 060
 				)
 				// maintainerConfigFetcher mock returns nil/nil by default — yields changelogRewrite=false (no rewrite call).
@@ -720,6 +751,7 @@ var _ = Describe("steps_planning", func() {
 					fakeRunner,
 					fakeFetcher,
 					withChangelogRewriteTrue(),
+					withNoRemoteTags(),
 					false,
 				) // spec 060
 				// spec 059: opt-in flag true → 058 rewrite pipeline runs.
@@ -762,6 +794,7 @@ var _ = Describe("steps_planning", func() {
 						fakeRunner,
 						fakeFetcher,
 						withChangelogRewriteTrue(),
+						withNoRemoteTags(),
 						false,
 					) // spec 060
 					// spec 059: opt-in flag true → 058 rewrite pipeline runs.
@@ -813,6 +846,7 @@ var _ = Describe("steps_planning", func() {
 					fakeRunner,
 					fakeFetcher,
 					withChangelogRewriteTrue(),
+					withNoRemoteTags(),
 					false,
 				) // spec 060
 				// spec 059: opt-in flag true → 058 rewrite pipeline runs.
@@ -855,6 +889,7 @@ var _ = Describe("steps_planning", func() {
 						fakeRunner,
 						fakeFetcher,
 						withChangelogRewriteTrue(),
+						withNoRemoteTags(),
 						false,
 					) // spec 060
 					// spec 059: opt-in flag true → 058 rewrite pipeline runs.
@@ -905,6 +940,7 @@ var _ = Describe("steps_planning", func() {
 					fakeRunner,
 					fakeFetcher,
 					withChangelogRewriteTrue(),
+					withNoRemoteTags(),
 					false,
 				) // spec 060
 				// spec 059: opt-in flag true → 058 rewrite pipeline runs.
@@ -969,6 +1005,7 @@ var _ = Describe("steps_planning", func() {
 						fakeRunner,
 						fakeFetcher,
 						withChangelogRewriteTrue(),
+						withNoRemoteTags(),
 						false,
 					) // spec 060
 
@@ -1062,6 +1099,7 @@ var _ = Describe("steps_planning", func() {
 						fakeRunner,
 						fakeFetcher,
 						fakeMaintainerCfg,
+						withNoRemoteTags(),
 						false,
 					) // spec 060
 					md, err := agentlib.ParseMarkdown(context.Background(), taskMD)
@@ -1107,6 +1145,7 @@ var _ = Describe("steps_planning", func() {
 					fakeRunner,
 					fakeFetcher,
 					fakeMaintainerCfg,
+					withNoRemoteTags(),
 					false,
 				) // spec 060
 				md, err := agentlib.ParseMarkdown(context.Background(), taskMD)
@@ -1139,6 +1178,7 @@ var _ = Describe("steps_planning", func() {
 						fakeRunner,
 						fakeFetcher,
 						fakeMaintainerCfg,
+						withNoRemoteTags(),
 						false,
 					) // spec 060
 					md, err := agentlib.ParseMarkdown(context.Background(), taskMD)
@@ -1192,6 +1232,7 @@ var _ = Describe("steps_planning", func() {
 						fakeRunner,
 						fakeFetcher,
 						maintainerFetcher,
+						withNoRemoteTags(),
 						false,
 					) // spec 060
 					md, err := agentlib.ParseMarkdown(context.Background(), taskMD)
@@ -1241,6 +1282,7 @@ var _ = Describe("steps_planning", func() {
 						fakeRunner,
 						fakeFetcher,
 						maintainerFetcher,
+						withNoRemoteTags(),
 						false,
 					) // spec 060
 					md, err := agentlib.ParseMarkdown(context.Background(), taskMD)
@@ -1282,6 +1324,7 @@ var _ = Describe("steps_planning", func() {
 						fakeRunner,
 						fakeFetcher,
 						maintainerFetcher,
+						withNoRemoteTags(),
 						false,
 					) // spec 060
 					md, err := agentlib.ParseMarkdown(context.Background(), taskMD)
@@ -1320,6 +1363,7 @@ var _ = Describe("steps_planning", func() {
 					fakeRunner,
 					fakeFetcher,
 					maintainerFetcher,
+					withNoRemoteTags(),
 					false,
 				) // spec 060
 				md, err := agentlib.ParseMarkdown(context.Background(), taskMD)
@@ -1360,6 +1404,7 @@ var _ = Describe("steps_planning", func() {
 					fakeRunner,
 					fakeFetcher,
 					maintainerFetcher,
+					withNoRemoteTags(),
 					false,
 				) // spec 060
 				md, err := agentlib.ParseMarkdown(context.Background(), taskMD)
@@ -1410,6 +1455,7 @@ var _ = Describe("steps_planning", func() {
 						fakeRunner,
 						fakeFetcher,
 						maintainerFetcher,
+						withNoRemoteTags(),
 						false,
 					) // spec 060
 					md, err := agentlib.ParseMarkdown(context.Background(), taskMD)
@@ -1451,6 +1497,7 @@ var _ = Describe("steps_planning", func() {
 						fakeRunner,
 						fakeFetcher,
 						maintainerFetcher,
+						withNoRemoteTags(),
 						false,
 					) // spec 060
 					md, err := agentlib.ParseMarkdown(context.Background(), taskMD)
@@ -1490,6 +1537,7 @@ var _ = Describe("steps_planning", func() {
 						fakeRunner,
 						fakeFetcher,
 						maintainerFetcher,
+						withNoRemoteTags(),
 						false,
 					) // spec 060
 					md, err := agentlib.ParseMarkdown(context.Background(), taskMD)
@@ -1539,6 +1587,7 @@ var _ = Describe("steps_planning", func() {
 						fakeRunner,
 						fakeFetcher,
 						maintainerFetcher,
+						withNoRemoteTags(),
 						false,
 					) // spec 060
 					md, err := agentlib.ParseMarkdown(context.Background(), taskMD)
@@ -1585,6 +1634,7 @@ var _ = Describe("steps_planning", func() {
 						fakeRunner,
 						fakeFetcher,
 						maintainerFetcher,
+						withNoRemoteTags(),
 						false,
 					) // spec 060
 					md, err := agentlib.ParseMarkdown(context.Background(), taskMD)
@@ -1641,6 +1691,7 @@ var _ = Describe("steps_planning", func() {
 						fakeRunner,
 						fakeFetcher,
 						maintainerFetcher,
+						withNoRemoteTags(),
 						false,
 					) // spec 060
 					md, err := agentlib.ParseMarkdown(context.Background(), taskMD)
@@ -1710,6 +1761,7 @@ var _ = Describe("steps_planning", func() {
 							fakeRunner,
 							fakeFetcher,
 							maintainerFetcher,
+							withNoRemoteTags(),
 							false, // spec 060: per-run override OFF
 						)
 
@@ -1774,6 +1826,7 @@ var _ = Describe("steps_planning", func() {
 							fakeRunner,
 							fakeFetcher,
 							maintainerFetcher,
+							withNoRemoteTags(),
 							false, // spec 060: per-run override OFF — repo opt-in alone is enough
 						)
 
@@ -1824,6 +1877,7 @@ var _ = Describe("steps_planning", func() {
 							fakeRunner,
 							fakeFetcher,
 							maintainerFetcher,
+							withNoRemoteTags(),
 							true, // spec 060: per-run CLI override ON
 						)
 
@@ -1874,6 +1928,7 @@ var _ = Describe("steps_planning", func() {
 						fakeRunner,
 						fakeFetcher,
 						maintainerFetcher,
+						withNoRemoteTags(),
 						false, // spec 060: per-run override OFF
 					)
 
@@ -1926,6 +1981,7 @@ var _ = Describe("steps_planning", func() {
 						fakeRunner,
 						fakeFetcher,
 						maintainerFetcher,
+						withNoRemoteTags(),
 						false, // spec 060: per-run override OFF
 					)
 
@@ -1969,6 +2025,212 @@ var _ = Describe("parseOwnerRepo", func() {
 		Entry("empty name", "owner/", "", "", false),
 		Entry("happy path", "owner/name", "owner", "name", true),
 	)
+})
+
+var _ = Context("plan-time current_version resolution (spec 001)", func() {
+	// Common fixtures shared by all four spec-001 branches.
+	const taskMDTemplate = `---
+status: in_progress
+phase: planning
+assignee: github-releaser-agent
+task_type: github-release
+repo: bborbe/maintainer
+clone_url: https://github.com/bborbe/maintainer.git
+ref: master
+current_version: v0.101.0
+task_identifier: gh-release-bborbe-maintainer-spec001
+---
+
+# release task
+`
+	standardChangelog := []byte(
+		"## Unreleased\n\n- feat: add foo\n\n## v0.101.0\n\n- old\n",
+	)
+	standardRunner := func() *mocks.ClaudeRunnerMock {
+		r := &mocks.ClaudeRunnerMock{}
+		r.RunReturns(&claudelib.ClaudeResult{
+			Result: `{"bump":"patch","reasoning":"feat: stub"}`,
+		}, nil)
+		return r
+	}
+
+	Context("AC #3: remote-latest wins", func() {
+		It(
+			"remote semver tag becomes effective current_version — bump computed from remote, not snapshot",
+			func() {
+				fakeFetcher := &mocks.Fetcher{}
+				fakeFetcher.FetchReturns(standardChangelog, nil)
+
+				tagsFetcher := &mocks.TagsFetcher{}
+				tagsFetcher.LatestSemverTagReturns("v0.101.1", nil)
+
+				fakeRunner := standardRunner()
+
+				step := pkg.NewPlanningStep(
+					fakeRunner,
+					fakeFetcher,
+					&mocks.MaintainerConfigFetcher{},
+					tagsFetcher,
+					false,
+				)
+
+				md, err := agentlib.ParseMarkdown(context.Background(), taskMDTemplate)
+				Expect(err).NotTo(HaveOccurred())
+
+				result, err := step.Run(context.Background(), md)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+
+				plan, err := agentlib.ExtractSection[pkg.PlanOutput](
+					context.Background(), md, "## Plan",
+				)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(plan.Outcome).To(Equal(pkg.PlanOutcomeReady))
+				// Bumped from the REMOTE v0.101.1, NOT the snapshot v0.101.0
+				Expect(plan.NextVersion).To(Equal("0.101.2"))
+				// CurrentVersion reflects the resolved remote tag
+				Expect(plan.CurrentVersion).To(Equal("v0.101.1"))
+				// No warning on the happy path
+				Expect(plan.ConfigFetchWarning).To(BeEmpty())
+			},
+		)
+	})
+
+	Context("AC #4: no-tags fallback", func() {
+		It("ErrNoTags → uses snapshot current_version, no warning", func() {
+			fakeFetcher := &mocks.Fetcher{}
+			fakeFetcher.FetchReturns(standardChangelog, nil)
+
+			tagsFetcher := &mocks.TagsFetcher{}
+			tagsFetcher.LatestSemverTagReturns("", githubtags.ErrNoTags)
+
+			fakeRunner := standardRunner()
+
+			step := pkg.NewPlanningStep(
+				fakeRunner,
+				fakeFetcher,
+				&mocks.MaintainerConfigFetcher{},
+				tagsFetcher,
+				false,
+			)
+
+			md, err := agentlib.ParseMarkdown(context.Background(), taskMDTemplate)
+			Expect(err).NotTo(HaveOccurred())
+
+			result, err := step.Run(context.Background(), md)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+
+			plan, err := agentlib.ExtractSection[pkg.PlanOutput](
+				context.Background(), md, "## Plan",
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(plan.Outcome).To(Equal(pkg.PlanOutcomeReady))
+			// Bumped from the SNAPSHOT v0.101.0 → 0.101.1
+			Expect(plan.NextVersion).To(Equal("0.101.1"))
+			// No warning on clean no-tags fallback
+			Expect(plan.ConfigFetchWarning).To(BeEmpty())
+		})
+	})
+
+	Context("AC #5: transient-error fallback + warning", func() {
+		It("non-ErrNoTags error → uses snapshot, surfaces non-fatal warning", func() {
+			fakeFetcher := &mocks.Fetcher{}
+			fakeFetcher.FetchReturns(standardChangelog, nil)
+
+			tagsFetcher := &mocks.TagsFetcher{}
+			tagsFetcher.LatestSemverTagReturns(
+				"",
+				stderrors.New("list tags: status 503: server error"),
+			)
+
+			fakeRunner := standardRunner()
+
+			step := pkg.NewPlanningStep(
+				fakeRunner,
+				fakeFetcher,
+				&mocks.MaintainerConfigFetcher{},
+				tagsFetcher,
+				false,
+			)
+
+			md, err := agentlib.ParseMarkdown(context.Background(), taskMDTemplate)
+			Expect(err).NotTo(HaveOccurred())
+
+			result, err := step.Run(context.Background(), md)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+
+			plan, err := agentlib.ExtractSection[pkg.PlanOutput](
+				context.Background(), md, "## Plan",
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(plan.Outcome).To(Equal(pkg.PlanOutcomeReady))
+			// Bumped from the SNAPSHOT v0.101.0 → 0.101.1 (NOT fail-closed)
+			Expect(plan.NextVersion).To(Equal("0.101.1"))
+			// Warning is non-empty and contains operator-grep evidence
+			Expect(plan.ConfigFetchWarning).NotTo(BeEmpty())
+			Expect(plan.ConfigFetchWarning).To(ContainSubstring("remote tag lookup failed"))
+			Expect(plan.ConfigFetchWarning).To(ContainSubstring("503"))
+		})
+	})
+
+	Context("AC #6: escalation preserved — empty snapshot AND no remote tags", func() {
+		It("empty frontmatter current_version escalates before reaching tags fetcher", func() {
+			// Changelog fetcher is irrelevant — empty frontmatter guard fires first.
+			fakeFetcher := &mocks.Fetcher{}
+			fakeFetcher.FetchReturns(standardChangelog, nil)
+
+			// Tags fetcher must NOT be called — empty-frontmatter guard short-circuits first.
+			tagsFetcher := &mocks.TagsFetcher{}
+			tagsFetcher.LatestSemverTagReturns("", githubtags.ErrNoTags)
+
+			fakeRunner := &mocks.ClaudeRunnerMock{} // never reached
+
+			step := pkg.NewPlanningStep(
+				fakeRunner,
+				fakeFetcher,
+				&mocks.MaintainerConfigFetcher{},
+				tagsFetcher,
+				false,
+			)
+
+			// frontmatter current_version is EMPTY
+			taskMD := `---
+status: in_progress
+phase: planning
+assignee: github-releaser-agent
+task_type: github-release
+repo: bborbe/maintainer
+clone_url: https://github.com/bborbe/maintainer.git
+ref: master
+current_version:
+task_identifier: gh-release-bborbe-maintainer-spec001-empty
+---
+
+# release task
+`
+			md, err := agentlib.ParseMarkdown(context.Background(), taskMD)
+			Expect(err).NotTo(HaveOccurred())
+
+			result, err := step.Run(context.Background(), md)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Status).To(Equal(agentlib.AgentStatusNeedsInput))
+
+			plan, err := agentlib.ExtractSection[pkg.PlanOutput](
+				context.Background(), md, "## Plan",
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(plan.Outcome).To(Equal(pkg.PlanOutcomeNeedsInput))
+			Expect(
+				plan.PreconditionFailed,
+			).To(Equal(pkg.PreconditionMissingFrontmatter + "current_version"))
+			Expect(md.Frontmatter["previous_assignee"]).To(Equal(pkg.AgentLogin))
+
+			// Tags fetcher was never called — empty-frontmatter guard fired first.
+			Expect(tagsFetcher.LatestSemverTagCallCount()).To(Equal(0))
+		})
+	})
 })
 
 var _ = Describe("classifyValidationFailure", func() {
@@ -2062,6 +2324,7 @@ task_identifier: gh-release-bborbe-maintainer-master-spec048
 					fakeRunner,
 					fakeFetcher,
 					&mocks.MaintainerConfigFetcher{},
+					withNoRemoteTags(),
 					false, // spec 060
 				)
 				// maintainerConfigFetcher mock returns nil/nil by default — never reached on P1 escalation.
