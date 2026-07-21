@@ -38,3 +38,42 @@ var _ = DescribeTable("BumpVersion",
 	Entry("empty bump rejected", "v1.2.3", "", "", "invalid bump"),
 	Entry("empty current version rejected", "", "patch", "", "parse version"),
 )
+
+var _ = DescribeTable("IsValid",
+	func(v string, want bool) {
+		Expect(semver.IsValid(v)).To(Equal(want))
+	},
+	Entry("v1.2.3 → true", "v1.2.3", true),
+	Entry("1.2.3 → true", "1.2.3", true),
+	Entry("v1.2.3-rc1 → false (pre-release)", "v1.2.3-rc1", false),
+	Entry("latest → false", "latest", false),
+	Entry("v1.2 → false (only 2 components)", "v1.2", false),
+	Entry("v1.2.3.4 → false (4 components)", "v1.2.3.4", false),
+	Entry("v-1.2.3 → false (negative-like)", "v-1.2.3", false),
+	Entry("empty → false", "", false),
+	Entry("v0.0.1 → true", "v0.0.1", true),
+)
+
+var _ = DescribeTable("Highest",
+	func(names []string, wantTag string, wantOK bool) {
+		tag, ok := semver.Highest(names)
+		Expect(ok).To(Equal(wantOK))
+		if wantOK {
+			Expect(tag).To(Equal(wantTag))
+		}
+	},
+	Entry("v0.101.0, v0.101.1, v0.100.9 → v0.101.1",
+		[]string{"v0.101.0", "v0.101.1", "v0.100.9"}, "v0.101.1", true),
+	Entry("scrambled order → v1.0.0 wins",
+		[]string{"v0.9.0", "v1.0.0", "v0.5.0"}, "v1.0.0", true),
+	Entry("non-semver skipped → v0.5.0",
+		[]string{"latest", "v0.5.0", "nightly"}, "v0.5.0", true),
+	Entry("no v prefix preserved → 0.101.1",
+		[]string{"0.101.1", "0.101.0"}, "0.101.1", true),
+	Entry("empty input → false",
+		[]string{}, "", false),
+	Entry("all non-semver → false",
+		[]string{"latest", "nightly"}, "", false),
+	Entry("numeric tie → first encountered (v1.2.3)",
+		[]string{"v1.2.3", "1.2.3"}, "v1.2.3", true),
+)
