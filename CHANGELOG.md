@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- docs(readme): drop `REPO_ALLOWLIST` from the env table — the binary never reads it (zero non-README hits outside `vendor/`), so the entry advertised a scope boundary that enforced nothing. Repo scope is enforced upstream by `github-release-watcher` plus IAT identity, as `pkg/git/error_classifier.go` already documents. The dead `agent.env.REPO_ALLOWLIST` values entries were removed from quant in parallel
+
 ## v0.3.0
 
 - feat: Add `pkg/githubtags` package — read-only GitHub REST API fetcher that returns the highest-semver tag from a repository's tag list, with pagination across all pages, `ErrNoTags` sentinel for empty/non-semver repos, and full counterfeiter mock

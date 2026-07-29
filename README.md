@@ -44,7 +44,11 @@ Env-driven (Kubernetes) — key variables:
 |---|---|
 | `APP_ID` / `INSTALLATION_ID` | GitHub App identity for the releaser (bypass actor on the target ruleset) |
 | `PEM_KEY` | GitHub App private key (mounted from a Secret) |
-| `REPO_ALLOWLIST` | Repos the agent may release (e.g. `github.com/bborbe/*,!github.com/bborbe/go-skeleton`) |
+
+This agent does **not** read `REPO_ALLOWLIST`. Repo scope is enforced upstream by
+`github-release-watcher` (which does read it) plus the installation-access-token
+identity — see `pkg/git/error_classifier.go`, which omits a `repo_not_found` class
+for exactly that reason. Setting `REPO_ALLOWLIST` on this agent has no effect.
 
 Per-repo opt-in is the target repo's `.maintainer.yaml` (`release.autoRelease: true`),
 enforced upstream by the release watcher.
