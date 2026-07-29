@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- fix(deps): bump `github.com/klauspost/compress` v1.18.6 → v1.18.7 (GO-2026-5841, OOB read in `s2`). Master CI was green at 9bebd96 on 2026-07-21 and went red purely from vuln-DB drift — no code changed — blocking every PR in the repo
+
 ## v0.3.0
 
 - feat: Add `pkg/githubtags` package — read-only GitHub REST API fetcher that returns the highest-semver tag from a repository's tag list, with pagination across all pages, `ErrNoTags` sentinel for empty/non-semver repos, and full counterfeiter mock
