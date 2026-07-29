@@ -70,3 +70,7 @@ enforced upstream by the release watcher.
 make precommit          # fmt, generate, test, lint, vet, vuln, license
 VERSION=vX.Y.Z make buca # build + push docker.io/bborbe/github-releaser-agent:vX.Y.Z
 ```
+
+## License
+
+BSD-style. See the [LICENSE](./LICENSE) file for details.

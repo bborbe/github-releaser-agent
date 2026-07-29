@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- docs(readme): add a `## License` section pointing at the root `LICENSE` file (BSD-style), satisfying `go-licensing/readme-license-section-required`
 - docs(readme): drop `REPO_ALLOWLIST` from the env table — the binary never reads it (zero non-README hits outside `vendor/`), so the entry advertised a scope boundary that enforced nothing. Repo scope is enforced upstream by `github-release-watcher` plus IAT identity, as `pkg/git/error_classifier.go` already documents. The dead `agent.env.REPO_ALLOWLIST` values entries were removed from quant in parallel
 
 ## v0.3.0
