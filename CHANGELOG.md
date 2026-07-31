@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.3.2
 
 - fix(deps): bump `github.com/bborbe/maintainer` v0.45.0 → v0.48.0 so `release.allowFork` parses. The agent's `maintainerconfig.Parse` aliases the lib's `ParseStrict` (`KnownFields(true)`), so a repo that opted a fork into auto-release with `allowFork: true` failed the whole config with `field allowFork not found in type maintainerconfig.ReleaseConfig` and dropped the release task into `human_review`. Hit live on `bborbe/tts-mcp` after `github-release-watcher` v0.3.1 shipped the fork gate — the watcher parses leniently and was unaffected, so the break only surfaced at the agent. Adds a regression test pinning the strict-parse behaviour for `allowFork`.
 
