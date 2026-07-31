@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- fix(deps): bump `github.com/bborbe/maintainer` v0.45.0 → v0.48.0 so `release.allowFork` parses. The agent's `maintainerconfig.Parse` aliases the lib's `ParseStrict` (`KnownFields(true)`), so a repo that opted a fork into auto-release with `allowFork: true` failed the whole config with `field allowFork not found in type maintainerconfig.ReleaseConfig` and dropped the release task into `human_review`. Hit live on `bborbe/tts-mcp` after `github-release-watcher` v0.3.1 shipped the fork gate — the watcher parses leniently and was unaffected, so the break only surfaced at the agent. Adds a regression test pinning the strict-parse behaviour for `allowFork`.
+
 ## v0.3.1
 
 - fix(deps): bump `github.com/klauspost/compress` v1.18.6 → v1.18.7 (GO-2026-5841, OOB read in `s2`). Master CI was green at 9bebd96 on 2026-07-21 and went red purely from vuln-DB drift — no code changed — blocking every PR in the repo

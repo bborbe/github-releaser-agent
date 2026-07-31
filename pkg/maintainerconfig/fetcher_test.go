@@ -168,6 +168,36 @@ var _ = Describe("httpFetcher", func() {
 		Expect(cfg.Release.ChangelogRewrite).To(BeTrue())
 	})
 
+	It("release.allowFork parses under the strict parser (fork opt-in regression)", func() {
+		// Regression guard. maintainerconfig.Parse aliases the lib's
+		// ParseStrict (KnownFields(true)), so any field the pinned lib does
+		// not know fails the whole config. When github-release-watcher
+		// v0.3.1 introduced release.allowFork, this agent still pinned
+		// maintainer v0.45.0 and rejected every opted-in fork's config with
+		// "field allowFork not found in type maintainerconfig.ReleaseConfig",
+		// failing the release task into human_review. Requires maintainer
+		// >= v0.48.0.
+		yamlBytes := []byte("release:\n  autoRelease: true\n  allowFork: true\n")
+		encoded := base64.StdEncoding.EncodeToString(yamlBytes)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"encoding": "base64",
+				"content":  encoded,
+			})
+		}))
+		defer server.Close()
+
+		fetcher := maintainerconfig.NewHTTPFetcherForTest("", server.URL)
+		data, err := fetcher.Fetch(ctx, "bborbe", "tts-mcp", "master")
+		Expect(err).NotTo(HaveOccurred())
+
+		cfg, err := maintainerconfig.Parse(ctx, data)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Release.AutoRelease).To(BeTrue())
+		Expect(cfg.Release.AllowFork).To(BeTrue())
+	})
+
 	It("authorization header forwarded when token is set", func() {
 		var capturedAuth string
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
