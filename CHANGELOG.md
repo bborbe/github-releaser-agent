@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 - feat(githubtags): add `TagsFetcher.CommitSHAForTag` — resolves a tag name to the commit SHA it points at via the tags-list endpoint (`commit.sha` is already dereferenced for annotated tags, so no second request), with an `ErrTagNotFound` sentinel for the tag-absent case and a shared `collectTags` pagination pass
+- feat(planning): close a release task as `completed` instead of escalating when the task ref is the commit the effective current version's tag already points at — a release check re-fired against a release commit is nothing to release, not a malformed changelog. The tag's commit SHA is consulted only after a `P1_unreleased_not_first` validation failure, matched hex-only, case-insensitively, at 7 characters or more, and every other case (different commit, absent tag, lookup error, short or non-hex ref, any other precondition) escalates byte-identically to before
 
 ## v0.3.2
 

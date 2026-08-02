@@ -2253,6 +2253,457 @@ var _ = Describe("classifyValidationFailure", func() {
 	)
 })
 
+var _ = Describe("steps_planning nothing_to_release (spec 002)", func() {
+	const incidentSHA = "7657fc0af1a115b2518ac4c4d332722d8fc3d35c"
+
+	// A HEALTHY post-release changelog: no ## Unreleased at all, first ##
+	// heading is a version header → ValidateUnreleased reports
+	// "Unreleased is not the first ## section" → P1_unreleased_not_first.
+	// This is the exact shape of the bborbe/tts-mcp incident.
+	releasedChangelog := []byte(
+		"# Changelog\n\nIntro.\n\n## v0.3.1\n\n- fix: something\n\n## v0.3.0\n\n- old\n",
+	)
+
+	taskMD := func(ref string) string {
+		return "---\nstatus: in_progress\nphase: planning\n" +
+			"assignee: github-releaser-agent\ntask_type: github-release\n" +
+			"repo: bborbe/tts-mcp\nclone_url: https://github.com/bborbe/tts-mcp.git\n" +
+			"ref: " + ref + "\ncurrent_version: v0.3.1\n" +
+			"task_identifier: gh-release-bborbe-tts-mcp-spec002\n---\n\n# release task\n"
+	}
+
+	Context("nothing_to_release on P1 validation failure with SHA match", func() {
+		It(
+			"nothing to release: ref equals the tag's commit → outcome=nothing_to_release, task completed",
+			func() {
+				fakeFetcher := &mocks.Fetcher{}
+				fakeFetcher.FetchReturns(releasedChangelog, nil)
+				fakeRunner := &mocks.ClaudeRunnerMock{}
+				tagsFetcher := &mocks.TagsFetcher{}
+				tagsFetcher.LatestSemverTagReturns("v0.3.1", nil)
+				tagsFetcher.CommitSHAForTagReturns(incidentSHA, nil)
+
+				step := pkg.NewPlanningStep(
+					fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, tagsFetcher, false,
+				)
+				md, err := agentlib.ParseMarkdown(context.Background(), taskMD(incidentSHA))
+				Expect(err).NotTo(HaveOccurred())
+
+				result, err := step.Run(context.Background(), md)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+				Expect(result.NextPhase).To(Equal("done"))
+				Expect(result.Status).NotTo(Equal(agentlib.AgentStatusNeedsInput))
+
+				plan, err := agentlib.ExtractSection[pkg.PlanOutput](
+					context.Background(),
+					md,
+					"## Plan",
+				)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(plan.Outcome).To(Equal(pkg.PlanOutcomeNothingToRelease))
+				Expect(plan.Reason).To(ContainSubstring("v0.3.1"))
+				Expect(plan.Reason).To(ContainSubstring(incidentSHA))
+				Expect(plan.PreconditionFailed).To(BeEmpty())
+
+				// LLM never called.
+				Expect(fakeRunner.RunCallCount()).To(Equal(0))
+
+				// Seam called with resolved tag.
+				_, owner, name, tag := tagsFetcher.CommitSHAForTagArgsForCall(0)
+				Expect(owner).To(Equal("bborbe"))
+				Expect(name).To(Equal("tts-mcp"))
+				Expect(tag).To(Equal("v0.3.1"))
+			},
+		)
+
+		It("no escalation frontmatter on the completing path", func() {
+			fakeFetcher := &mocks.Fetcher{}
+			fakeFetcher.FetchReturns(releasedChangelog, nil)
+			fakeRunner := &mocks.ClaudeRunnerMock{}
+			tagsFetcher := &mocks.TagsFetcher{}
+			tagsFetcher.LatestSemverTagReturns("v0.3.1", nil)
+			tagsFetcher.CommitSHAForTagReturns(incidentSHA, nil)
+
+			step := pkg.NewPlanningStep(
+				fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, tagsFetcher, false,
+			)
+			md, err := agentlib.ParseMarkdown(context.Background(), taskMD(incidentSHA))
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = step.Run(context.Background(), md)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(md.Frontmatter["status"]).To(Equal("completed"))
+			Expect(md.Frontmatter["phase"]).To(Equal("done"))
+			Expect(md.Frontmatter).NotTo(HaveKey("previous_assignee"))
+			Expect(md.Frontmatter["assignee"]).To(Equal("github-releaser-agent"))
+		})
+
+		It("short ref still completes when within bounds", func() {
+			fakeFetcher := &mocks.Fetcher{}
+			fakeFetcher.FetchReturns(releasedChangelog, nil)
+			fakeRunner := &mocks.ClaudeRunnerMock{}
+			tagsFetcher := &mocks.TagsFetcher{}
+			tagsFetcher.LatestSemverTagReturns("v0.3.1", nil)
+			tagsFetcher.CommitSHAForTagReturns(incidentSHA, nil)
+
+			step := pkg.NewPlanningStep(
+				fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, tagsFetcher, false,
+			)
+			md, err := agentlib.ParseMarkdown(context.Background(), taskMD("7657fc0"))
+			Expect(err).NotTo(HaveOccurred())
+
+			result, err := step.Run(context.Background(), md)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+
+			plan, err := agentlib.ExtractSection[pkg.PlanOutput](
+				context.Background(),
+				md,
+				"## Plan",
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(plan.Outcome).To(Equal(pkg.PlanOutcomeNothingToRelease))
+
+			Expect(fakeRunner.RunCallCount()).To(Equal(0))
+		})
+	})
+
+	Context("negative — escalation paths", func() {
+		It("different commit escalates", func() {
+			fakeFetcher := &mocks.Fetcher{}
+			fakeFetcher.FetchReturns(releasedChangelog, nil)
+			fakeRunner := &mocks.ClaudeRunnerMock{}
+			tagsFetcher := &mocks.TagsFetcher{}
+			tagsFetcher.LatestSemverTagReturns("v0.3.1", nil)
+			tagsFetcher.CommitSHAForTagReturns("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", nil)
+
+			step := pkg.NewPlanningStep(
+				fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, tagsFetcher, false,
+			)
+			md, err := agentlib.ParseMarkdown(
+				context.Background(),
+				taskMD("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			)
+			Expect(err).NotTo(HaveOccurred())
+
+			result, err := step.Run(context.Background(), md)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Status).To(Equal(agentlib.AgentStatusNeedsInput))
+
+			plan, err := agentlib.ExtractSection[pkg.PlanOutput](
+				context.Background(),
+				md,
+				"## Plan",
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(plan.Outcome).To(Equal(pkg.PlanOutcomeNeedsInput))
+			Expect(plan.PreconditionFailed).To(Equal(pkg.PreconditionP1UnreleasedNotFirst))
+			Expect(md.Frontmatter["previous_assignee"]).To(Equal(pkg.AgentLogin))
+			Expect(md.Frontmatter["assignee"]).To(Equal(""))
+
+			Expect(fakeRunner.RunCallCount()).To(Equal(0))
+		})
+
+		It("tag absent escalates", func() {
+			fakeFetcher := &mocks.Fetcher{}
+			fakeFetcher.FetchReturns(releasedChangelog, nil)
+			fakeRunner := &mocks.ClaudeRunnerMock{}
+			tagsFetcher := &mocks.TagsFetcher{}
+			tagsFetcher.LatestSemverTagReturns("v0.3.1", nil)
+			tagsFetcher.CommitSHAForTagReturns("", githubtags.ErrTagNotFound)
+
+			step := pkg.NewPlanningStep(
+				fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, tagsFetcher, false,
+			)
+			md, err := agentlib.ParseMarkdown(context.Background(), taskMD(incidentSHA))
+			Expect(err).NotTo(HaveOccurred())
+
+			result, err := step.Run(context.Background(), md)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Status).To(Equal(agentlib.AgentStatusNeedsInput))
+
+			plan, err := agentlib.ExtractSection[pkg.PlanOutput](
+				context.Background(),
+				md,
+				"## Plan",
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(plan.Outcome).To(Equal(pkg.PlanOutcomeNeedsInput))
+			Expect(plan.PreconditionFailed).To(Equal(pkg.PreconditionP1UnreleasedNotFirst))
+
+			Expect(fakeRunner.RunCallCount()).To(Equal(0))
+		})
+
+		It("lookup failure escalates (fail-open)", func() {
+			fakeFetcher := &mocks.Fetcher{}
+			fakeFetcher.FetchReturns(releasedChangelog, nil)
+			fakeRunner := &mocks.ClaudeRunnerMock{}
+			tagsFetcher := &mocks.TagsFetcher{}
+			tagsFetcher.LatestSemverTagReturns("v0.3.1", nil)
+			tagsFetcher.CommitSHAForTagReturns(
+				"",
+				stderrors.New("list tags: status 503: server error"),
+			)
+
+			step := pkg.NewPlanningStep(
+				fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, tagsFetcher, false,
+			)
+			md, err := agentlib.ParseMarkdown(context.Background(), taskMD(incidentSHA))
+			Expect(err).NotTo(HaveOccurred())
+
+			result, err := step.Run(context.Background(), md)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Status).To(Equal(agentlib.AgentStatusNeedsInput))
+
+			plan, err := agentlib.ExtractSection[pkg.PlanOutput](
+				context.Background(),
+				md,
+				"## Plan",
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(plan.Outcome).To(Equal(pkg.PlanOutcomeNeedsInput))
+			Expect(plan.PreconditionFailed).To(Equal(pkg.PreconditionP1UnreleasedNotFirst))
+
+			Expect(fakeRunner.RunCallCount()).To(Equal(0))
+		})
+
+		It("short ref cannot manufacture a match", func() {
+			fakeFetcher := &mocks.Fetcher{}
+			fakeFetcher.FetchReturns(releasedChangelog, nil)
+			fakeRunner := &mocks.ClaudeRunnerMock{}
+			tagsFetcher := &mocks.TagsFetcher{}
+			tagsFetcher.LatestSemverTagReturns("v0.3.1", nil)
+			tagsFetcher.CommitSHAForTagReturns("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil)
+
+			step := pkg.NewPlanningStep(
+				fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, tagsFetcher, false,
+			)
+			md, err := agentlib.ParseMarkdown(context.Background(), taskMD("a"))
+			Expect(err).NotTo(HaveOccurred())
+
+			result, err := step.Run(context.Background(), md)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Status).To(Equal(agentlib.AgentStatusNeedsInput))
+
+			plan, err := agentlib.ExtractSection[pkg.PlanOutput](
+				context.Background(),
+				md,
+				"## Plan",
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(plan.PreconditionFailed).To(Equal(pkg.PreconditionP1UnreleasedNotFirst))
+
+			Expect(fakeRunner.RunCallCount()).To(Equal(0))
+		})
+
+		It("non-hex ref cannot match", func() {
+			fakeFetcher := &mocks.Fetcher{}
+			fakeFetcher.FetchReturns(releasedChangelog, nil)
+			fakeRunner := &mocks.ClaudeRunnerMock{}
+			tagsFetcher := &mocks.TagsFetcher{}
+			tagsFetcher.LatestSemverTagReturns("v0.3.1", nil)
+			tagsFetcher.CommitSHAForTagReturns(incidentSHA, nil)
+
+			step := pkg.NewPlanningStep(
+				fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, tagsFetcher, false,
+			)
+			md, err := agentlib.ParseMarkdown(context.Background(), taskMD("main"))
+			Expect(err).NotTo(HaveOccurred())
+
+			result, err := step.Run(context.Background(), md)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Status).To(Equal(agentlib.AgentStatusNeedsInput))
+
+			plan, err := agentlib.ExtractSection[pkg.PlanOutput](
+				context.Background(),
+				md,
+				"## Plan",
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(plan.PreconditionFailed).To(Equal(pkg.PreconditionP1UnreleasedNotFirst))
+
+			Expect(fakeRunner.RunCallCount()).To(Equal(0))
+		})
+
+		It("other preconditions never consult the tag seam", func() {
+			// Unreleased is first but empty → P2_unreleased_empty.
+			emptyUnreleasedChangelog := []byte("## Unreleased\n\n## v0.3.1\n\n- old\n")
+			fakeFetcher := &mocks.Fetcher{}
+			fakeFetcher.FetchReturns(emptyUnreleasedChangelog, nil)
+			fakeRunner := &mocks.ClaudeRunnerMock{}
+			tagsFetcher := &mocks.TagsFetcher{}
+			tagsFetcher.LatestSemverTagReturns("v0.3.1", nil)
+			// Deliberately return a matching SHA — if the seam were consulted
+			// this would incorrectly complete instead of escalating.
+			tagsFetcher.CommitSHAForTagReturns(incidentSHA, nil)
+
+			step := pkg.NewPlanningStep(
+				fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, tagsFetcher, false,
+			)
+			md, err := agentlib.ParseMarkdown(context.Background(), taskMD(incidentSHA))
+			Expect(err).NotTo(HaveOccurred())
+
+			result, err := step.Run(context.Background(), md)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Status).To(Equal(agentlib.AgentStatusNeedsInput))
+
+			plan, err := agentlib.ExtractSection[pkg.PlanOutput](
+				context.Background(),
+				md,
+				"## Plan",
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(plan.PreconditionFailed).To(Equal(pkg.PreconditionP2UnreleasedEmpty))
+
+			// Tag seam was NEVER consulted.
+			Expect(tagsFetcher.CommitSHAForTagCallCount()).To(Equal(0))
+
+			Expect(fakeRunner.RunCallCount()).To(Equal(0))
+		})
+
+		It("happy path makes no extra request", func() {
+			healthyChangelog := []byte("## Unreleased\n\n- feat: add foo\n\n## v0.3.1\n\n- old\n")
+			fakeFetcher := &mocks.Fetcher{}
+			fakeFetcher.FetchReturns(healthyChangelog, nil)
+			fakeRunner := &mocks.ClaudeRunnerMock{}
+			fakeRunner.RunReturns(&claudelib.ClaudeResult{
+				Result: `{"bump":"patch","reasoning":"stub"}`,
+			}, nil)
+			tagsFetcher := &mocks.TagsFetcher{}
+			tagsFetcher.LatestSemverTagReturns("v0.3.1", nil)
+			// Deliberately return a matching SHA — if consulted this path
+			// would be the wrong behavior.
+			tagsFetcher.CommitSHAForTagReturns(incidentSHA, nil)
+
+			step := pkg.NewPlanningStep(
+				fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, tagsFetcher, false,
+			)
+			md, err := agentlib.ParseMarkdown(context.Background(), taskMD(incidentSHA))
+			Expect(err).NotTo(HaveOccurred())
+
+			result, err := step.Run(context.Background(), md)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+
+			plan, err := agentlib.ExtractSection[pkg.PlanOutput](
+				context.Background(),
+				md,
+				"## Plan",
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(plan.Outcome).To(Equal(pkg.PlanOutcomeReady))
+
+			// Tag seam was NEVER consulted.
+			Expect(tagsFetcher.CommitSHAForTagCallCount()).To(Equal(0))
+		})
+	})
+
+	Describe("sameCommit bounds", func() {
+		DescribeTable("pkg.SameCommitForTest",
+			func(ref, tagCommit string, want bool) {
+				Expect(pkg.SameCommitForTest(ref, tagCommit)).To(Equal(want))
+			},
+			Entry("7-char prefix matches 40-char SHA",
+				"7657fc0", incidentSHA, true),
+			Entry("differs in last char",
+				"7657fc1", incidentSHA, false),
+			Entry("case-insensitive lowercase",
+				"7657FC0", incidentSHA, true),
+			Entry("full SHA vs uppercase",
+				incidentSHA, strings.ToUpper(incidentSHA), true),
+			Entry("6 chars below bound",
+				"765fc0", incidentSHA, false),
+			Entry("non-hex ref",
+				"main", incidentSHA, false),
+			Entry("empty ref",
+				"", incidentSHA, false),
+			Entry("empty tagCommit",
+				incidentSHA, "", false),
+			Entry("equal short-vs-short at bound",
+				"7657fc0", "7657fc0", true),
+		)
+	})
+
+	Describe("releaseTagVerdict tokens", func() {
+		It("match → nothing_to_release", func() {
+			Expect(pkg.ReleaseTagVerdictForTest(incidentSHA, incidentSHA)).
+				To(Equal("nothing_to_release"))
+		})
+		It("mismatch → escalate", func() {
+			Expect(
+				pkg.ReleaseTagVerdictForTest("7657fc0", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+			).
+				To(Equal("escalate"))
+		})
+	})
+
+	Context("deliverer boundary (bug 048 mirror)", func() {
+		var tmpDir string
+		var taskFile string
+
+		BeforeEach(func() {
+			var err error
+			tmpDir, err = os.MkdirTemp("", "spec-002-*")
+			Expect(err).NotTo(HaveOccurred())
+			taskFile = filepath.Join(tmpDir, "task.md")
+		})
+
+		AfterEach(func() {
+			_ = os.RemoveAll(tmpDir)
+		})
+
+		It(
+			"framework deliverer writes status: completed, phase: done, assignee unchanged on nothing_to_release",
+			func() {
+				Expect(os.WriteFile(taskFile, []byte(taskMD(incidentSHA)), 0o600)).To(Succeed())
+
+				fakeFetcher := &mocks.Fetcher{}
+				fakeFetcher.FetchReturns(releasedChangelog, nil)
+				fakeRunner := &mocks.ClaudeRunnerMock{}
+				tagsFetcher := &mocks.TagsFetcher{}
+				tagsFetcher.LatestSemverTagReturns("v0.3.1", nil)
+				tagsFetcher.CommitSHAForTagReturns(incidentSHA, nil)
+
+				step := pkg.NewPlanningStep(
+					fakeRunner,
+					fakeFetcher,
+					&mocks.MaintainerConfigFetcher{},
+					tagsFetcher,
+					false,
+				)
+				agent := agentlib.NewAgent(agentlib.NewPhase(domain.TaskPhasePlanning, step))
+				deliverer := delivery.NewFileResultDeliverer(
+					delivery.NewPassthroughContentGenerator(),
+					taskFile,
+				)
+
+				result, err := agent.Run(
+					context.Background(),
+					domain.TaskPhasePlanning,
+					taskMD(incidentSHA),
+					deliverer,
+				)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result).NotTo(BeNil())
+				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+
+				mutated, err := os.ReadFile(taskFile)
+				Expect(err).NotTo(HaveOccurred())
+				mutatedStr := string(mutated)
+
+				Expect(mutatedStr).To(ContainSubstring("status: completed"))
+				Expect(mutatedStr).To(ContainSubstring("phase: done"))
+				Expect(mutatedStr).To(ContainSubstring("assignee: github-releaser-agent"))
+				Expect(mutatedStr).NotTo(ContainSubstring("previous_assignee"))
+
+				Expect(fakeRunner.RunCallCount()).To(Equal(0))
+			},
+		)
+	})
+})
+
 var _ = Describe("steps_planning integration (spec 048 regression guard)", func() {
 	// This test wires the full agent via factory.CreateAgent and runs it
 	// against the real FileResultDeliverer to exercise the framework-side

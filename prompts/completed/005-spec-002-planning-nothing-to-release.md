@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [002-planning-close-nothing-to-release]
+summary: 'Added nothing_to_release planning outcome: when a P1_unreleased_not_first validation failure coincides with GitHub confirming the task ref is the exact commit the current version tag points at, the planning step now completes the task as done instead of escalating'
+execution_id: github-releaser-agent-nothing-to-release-exec-005-spec-002-planning-nothing-to-release
+dark-factory-version: v0.192.9
 created: "2026-08-02T15:20:00Z"
 queued: "2026-08-02T13:42:58Z"
+started: "2026-08-02T13:46:15Z"
+completed: "2026-08-02T13:50:51Z"
 branch: dark-factory/planning-close-nothing-to-release
 ---
 
