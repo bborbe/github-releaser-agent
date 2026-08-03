@@ -1,9 +1,10 @@
 ---
-status: verifying
+status: completed
 approved: "2026-08-02T13:15:26Z"
 generating: "2026-08-02T13:16:24Z"
 prompted: "2026-08-02T13:31:21Z"
 verifying: "2026-08-02T13:50:52Z"
+completed: "2026-08-03T18:31:12Z"
 branch: dark-factory/planning-close-nothing-to-release
 ---
 
