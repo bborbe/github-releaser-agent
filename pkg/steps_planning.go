@@ -28,6 +28,68 @@ import (
 // "github-releaser-agent" — grep-asserted by acceptance criteria.
 const AgentLogin = "github-releaser-agent"
 
+// minRefMatchLen is the shortest task ref that may participate in a commit
+// match. Below this a truncated or hand-edited ref could prefix-match an
+// unrelated commit, so anything shorter is a non-match (spec 002
+// § Constraints "Match bound").
+const minRefMatchLen = 7
+
+// releaseTagVerdictEscalate is the log token for the non-matching branch of
+// the release-tag check. The matching branch logs PlanOutcomeNothingToRelease.
+const releaseTagVerdictEscalate = "escalate"
+
+// isHexString reports whether s is non-empty and consists only of hex
+// digits. Non-hex refs (e.g. a branch name like "main") can never match a
+// commit SHA.
+func isHexString(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= '0' && c <= '9':
+		case c >= 'a' && c <= 'f':
+		case c >= 'A' && c <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// sameCommit reports whether ref and tagCommit denote the same commit.
+// All four bounds must hold: both hex-only, both at least minRefMatchLen
+// characters, and — after lowercasing — the shorter is a prefix of the
+// longer. Empty, short, or non-hex input is always a non-match; a
+// nothing_to_release verdict may only be written on a positive match here.
+func sameCommit(ref, tagCommit string) bool {
+	a := strings.ToLower(strings.TrimSpace(ref))
+	b := strings.ToLower(strings.TrimSpace(tagCommit))
+	if len(a) < minRefMatchLen || len(b) < minRefMatchLen {
+		return false
+	}
+	if !isHexString(a) || !isHexString(b) {
+		return false
+	}
+	if len(a) > len(b) {
+		a, b = b, a
+	}
+	return strings.HasPrefix(b, a)
+}
+
+// releaseTagVerdict returns the log/decision token for the release-tag
+// check: PlanOutcomeNothingToRelease on a positive commit match,
+// releaseTagVerdictEscalate otherwise. Pure function of its inputs — the
+// same token is written to the log line and drives the branch, so the two
+// can never disagree.
+func releaseTagVerdict(ref, tagCommit string) string {
+	if sameCommit(ref, tagCommit) {
+		return PlanOutcomeNothingToRelease
+	}
+	return releaseTagVerdictEscalate
+}
+
 // requiredFrontmatterFields are the keys read from the task's frontmatter
 // before the step does any IO. Missing OR empty → outcome=needs_input
 // with precondition_failed = "missing_frontmatter_<field>".
@@ -128,14 +190,9 @@ func (s *planningStep) Run(ctx context.Context, md *agentlib.Markdown) (*agentli
 		Infof("planning: fetched CHANGELOG.md owner=%s name=%s ref=%s bytes=%d", owner, name, ref, len(changelogBytes))
 	valid, reason, _ := changelog.ValidateUnreleased(changelogBytes)
 	if !valid {
-		precondition := classifyValidationFailure(reason)
-		glog.V(2).
-			Infof("planning: validate Unreleased failed precondition=%s reason=%q", precondition, reason)
-		return s.escalate(ctx, md, escalation{
-			reason:             reason,
-			preconditionFailed: precondition,
-			currentVersion:     currentVersion,
-		})
+		return s.handleValidationFailure(
+			ctx, md, owner, name, ref, effectiveVersion, reason, currentVersion,
+		)
 	}
 	bullets := changelog.ExtractUnreleasedBullets(changelogBytes)
 	prefixStyle := changelog.InferHeaderPrefixStyle(changelogBytes)
@@ -650,6 +707,106 @@ func (s *planningStep) escalate(
 	return &agentlib.Result{
 		Status:  agentlib.AgentStatusNeedsInput,
 		Message: e.reason,
+	}, nil
+}
+
+// releaseTagCommit returns the commit SHA the named tag points at, or ""
+// when the tag is absent or the lookup failed. Fail-open by construction:
+// EVERY error path returns "", which yields a non-match and therefore the
+// unchanged escalation. A GitHub outage can never convert an escalation
+// into a silent completion (spec 002 § Failure Modes rows 1, 2, 7).
+func (s *planningStep) releaseTagCommit(
+	ctx context.Context,
+	owner, name, tag string,
+) string {
+	sha, err := s.tagsFetcher.CommitSHAForTag(ctx, owner, name, tag)
+	if err != nil {
+		if stderrors.Is(err, githubtags.ErrTagNotFound) {
+			glog.V(2).Infof("planning: tag %s absent on %s/%s", tag, owner, name)
+			return ""
+		}
+		glog.Warningf(
+			"planning: tag-commit lookup failed for %s/%s tag=%s (escalating): %v",
+			owner, name, tag, err,
+		)
+		return ""
+	}
+	return sha
+}
+
+// handleValidationFailure decides between completing the task as
+// nothing_to_release and the unchanged escalation.
+//
+// The release-tag check runs ONLY on a P1_unreleased_not_first failure —
+// the one case where a healthy post-release changelog is misread as
+// malformed. Every other precondition (P2_unreleased_empty,
+// bad_current_version, missing_frontmatter_*) escalates without touching
+// the tag seam, so the happy path and the other failure paths make no
+// extra GitHub request (spec 002 § Constraints).
+//
+// effectiveVersion is the tag resolved by resolveCurrentVersion and is
+// the tag consulted for the commit lookup. snapshotVersion is the
+// frontmatter current_version, preserved verbatim on the escalation path.
+func (s *planningStep) handleValidationFailure(
+	ctx context.Context,
+	md *agentlib.Markdown,
+	owner, name, ref, effectiveVersion, reason, snapshotVersion string,
+) (*agentlib.Result, error) {
+	precondition := classifyValidationFailure(reason)
+	glog.V(2).
+		Infof("planning: validate Unreleased failed precondition=%s reason=%q", precondition, reason)
+	if precondition == PreconditionP1UnreleasedNotFirst {
+		tagCommit := s.releaseTagCommit(ctx, owner, name, effectiveVersion)
+		verdict := releaseTagVerdict(ref, tagCommit)
+		glog.V(2).Infof("planning: release_tag_check ref=%s tag=%s tag_commit=%s verdict=%s",
+			ref, effectiveVersion, tagCommit, verdict,
+		)
+		if verdict == PlanOutcomeNothingToRelease {
+			return s.publishNothingToRelease(ctx, md, effectiveVersion, tagCommit)
+		}
+	}
+	return s.escalate(ctx, md, escalation{
+		reason:             reason,
+		preconditionFailed: precondition,
+		currentVersion:     snapshotVersion,
+	})
+}
+
+// publishNothingToRelease writes a ## Plan(outcome=nothing_to_release)
+// block naming the tag and the shared commit SHA, marks the task
+// completed/done, and returns the EXPLICIT terminal disposition
+// (Status=Done, NextPhase="done") used by ai_review's finishReviewOverride
+// — never the empty-NextPhase auto-advance (bug 048).
+//
+// It deliberately writes NO escalation frontmatter: `assignee` is left
+// byte-identical to its input value and `previous_assignee` is never set.
+// There is nothing for an operator to pick up (spec 002 § Desired Behavior 2).
+func (s *planningStep) publishNothingToRelease(
+	ctx context.Context,
+	md *agentlib.Markdown,
+	tag, tagCommit string,
+) (*agentlib.Result, error) {
+	reason := fmt.Sprintf(
+		"nothing to release: task ref is the commit tag %s already points at (%s)",
+		tag, tagCommit,
+	)
+	output := PlanOutput{
+		Outcome:        PlanOutcomeNothingToRelease,
+		Reason:         reason,
+		CurrentVersion: tag,
+	}
+	section, err := agentlib.MarshalSectionTyped(ctx, "## Plan", output)
+	if err != nil {
+		return nil, errors.Wrap(ctx, err, "marshal ## Plan section (nothing_to_release)")
+	}
+	md.ReplaceSection(section)
+	md.Frontmatter["status"] = "completed"
+	md.Frontmatter["phase"] = "done"
+	glog.V(2).Infof("planning: nothing to release — tag=%s commit=%s", tag, tagCommit)
+	return &agentlib.Result{
+		Status:    agentlib.AgentStatusDone,
+		NextPhase: "done",
+		Message:   reason,
 	}, nil
 }
 

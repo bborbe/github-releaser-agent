@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- feat(githubtags): add `TagsFetcher.CommitSHAForTag` — resolves a tag name to the commit SHA it points at via the tags-list endpoint (`commit.sha` is already dereferenced for annotated tags, so no second request), with an `ErrTagNotFound` sentinel for the tag-absent case and a shared `collectTags` pagination pass
+- feat(planning): close a release task as `completed` instead of escalating when the task ref is the commit the effective current version's tag already points at — a release check re-fired against a release commit is nothing to release, not a malformed changelog. The tag's commit SHA is consulted only after a `P1_unreleased_not_first` validation failure, matched hex-only, case-insensitively, at 7 characters or more, and every other case (different commit, absent tag, lookup error, short or non-hex ref, any other precondition) escalates byte-identically to before
+
 ## v0.3.2
 
 - fix(deps): bump `github.com/bborbe/maintainer` v0.45.0 → v0.48.0 so `release.allowFork` parses. The agent's `maintainerconfig.Parse` aliases the lib's `ParseStrict` (`KnownFields(true)`), so a repo that opted a fork into auto-release with `allowFork: true` failed the whole config with `field allowFork not found in type maintainerconfig.ReleaseConfig` and dropped the release task into `human_review`. Hit live on `bborbe/tts-mcp` after `github-release-watcher` v0.3.1 shipped the fork gate — the watcher parses leniently and was unaffected, so the break only surfaced at the agent. Adds a regression test pinning the strict-parse behaviour for `allowFork`.

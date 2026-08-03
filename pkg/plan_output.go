@@ -8,10 +8,11 @@ package pkg
 // planning step writes for every release task. Round-trips with
 // agentlib.MarshalSectionTyped + agentlib.ExtractSection[PlanOutput].
 //
-// Three shapes are valid:
+// Four shapes are valid:
 //   - Outcome="ready"        — planning succeeded; Bump/NextVersion populated
 //   - Outcome="needs_input"  — precondition failure; Reason + PreconditionFailed populated
 //   - Outcome="failed"       — invalid config; ErrorCategory + InvalidField + InvalidValue populated
+//   - Outcome="nothing_to_release" — ref is already released; Reason + CurrentVersion populated
 //
 // No `Details map[string]any`: concrete fields only. Future fields require
 // a spec amendment.
@@ -101,6 +102,13 @@ const (
 	// keeps the task in_progress and waits for operator re-delegation.
 	// See spec 059 § Desired Behavior 5 and § AC 11/12.
 	PlanOutcomeFailed = "failed"
+	// PlanOutcomeNothingToRelease signals the task targets a commit that
+	// is ALREADY released: the effective current version's tag points at
+	// the task's own ref. Terminal success — the step returns
+	// Status=AgentStatusDone, NextPhase="done" and writes NO escalation
+	// frontmatter. Only ever written on a positive, observed SHA match
+	// (spec 002 § Desired Behavior 2/3).
+	PlanOutcomeNothingToRelease = "nothing_to_release"
 )
 
 const (

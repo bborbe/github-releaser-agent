@@ -31,15 +31,20 @@ import (
 //counterfeiter:generate -o ../../mocks/tags_fetcher.go --fake-name TagsFetcher . TagsFetcher
 
 // TagsFetcher resolves a remote GitHub repo's highest-semver tag.
-// Implementations MUST be safe for concurrent use.
-//
-// LatestSemverTag returns the highest-semver tag string (original
-// spelling, e.g. "v0.101.1"). When the repo has zero tags OR none of
-// its tags are valid semver, it returns ErrNoTags so the caller can
-// fall back to the emit-time snapshot cleanly. All other failures
-// (transport, non-2xx, decode) return a wrapped error.
 type TagsFetcher interface {
 	LatestSemverTag(ctx context.Context, owner, repo string) (string, error)
+
+	// CommitSHAForTag returns the COMMIT SHA the named tag points at.
+	// GitHub's tags-list endpoint reports commit.sha already dereferenced
+	// for annotated tags, so the returned SHA is always a commit, never a
+	// tag object (spec 002 § Assumptions).
+	//
+	// Returns ErrTagNotFound when the listing succeeds but contains no
+	// entry whose name equals tag exactly (case-sensitive, no v-prefix
+	// normalisation). All other failures (empty args, transport, non-2xx,
+	// decode, entry with an empty commit sha) return a wrapped error.
+	// Costs one tags-list pagination — never one request per tag.
+	CommitSHAForTag(ctx context.Context, owner, repo, tag string) (string, error)
 }
 
 // ErrNoTags signals the repo has no usable semver tag (empty tag list,
@@ -48,6 +53,15 @@ type TagsFetcher interface {
 // no-tags branch). Mirrors pkg/maintainerconfig.ErrFileNotFound and
 // pkg/githubreview.ErrTagNotFound (project sentinel convention).
 var ErrNoTags = stderrors.New("githubtags: no usable semver tag on remote")
+
+// ErrTagNotFound signals that the named tag is absent from the remote's
+// tag list (a successful 2xx listing that contains no entry with that
+// exact name). Callers use errors.Is(err, ErrTagNotFound) to distinguish
+// "tag genuinely does not exist" from a transport/decode failure — spec
+// 002 escalates on BOTH, but only the absent case is expected traffic.
+// Mirrors pkg/githubreview.ErrTagNotFound and pkg/maintainerconfig.ErrFileNotFound
+// (project sentinel convention).
+var ErrTagNotFound = stderrors.New("githubtags: tag not found on remote")
 
 // NewHTTPTagsFetcher constructs a TagsFetcher backed by net/http against
 // api.github.com. token is the bearer token (GitHub App IAT or PAT);
@@ -78,8 +92,57 @@ type httpTagsFetcher struct {
 	apiBase string
 }
 
+// tagResponse is one entry of the GitHub tags-list payload. Commit.SHA is
+// the COMMIT the tag points at — GitHub dereferences annotated tags on this
+// endpoint, so no second request against the tag object is needed
+// (spec 002 § Assumptions).
 type tagResponse struct {
-	Name string `json:"name"`
+	Name   string        `json:"name"`
+	Commit tagCommitInfo `json:"commit"`
+}
+
+// tagCommitInfo is the nested commit object of a tags-list entry.
+type tagCommitInfo struct {
+	SHA string `json:"sha"`
+}
+
+// collectTags paginates the full tags list for owner/repo and returns every
+// entry across all pages. GitHub returns tags in refname order (NOT semver
+// order) capped at 100 per page, so both lookups must read every page.
+// It is the single pagination site for this package — one tags-list
+// pagination per call, never one request per tag.
+func (f *httpTagsFetcher) collectTags(
+	ctx context.Context,
+	owner, repo string,
+) ([]tagResponse, error) {
+	if owner == "" {
+		return nil, errors.Errorf(ctx, "list tags: owner empty")
+	}
+	if repo == "" {
+		return nil, errors.Errorf(ctx, "list tags: repo empty")
+	}
+
+	endpoint := fmt.Sprintf(
+		"%s/repos/%s/%s/tags?per_page=100",
+		f.apiBase, url.PathEscape(owner), url.PathEscape(repo),
+	)
+
+	tags := []tagResponse{}
+	iterations := 0
+	for pageURL := endpoint; pageURL != ""; {
+		iterations++
+		if iterations > 100 {
+			return nil, errors.Errorf(ctx, "list tags: too many pages")
+		}
+		pageTags, next, err := f.fetchPage(ctx, pageURL)
+		if err != nil {
+			return nil, err
+		}
+		tags = append(tags, pageTags...)
+		pageURL = next
+	}
+
+	return tags, nil
 }
 
 // LatestSemverTag implements TagsFetcher. It paginates through all tag
@@ -89,33 +152,14 @@ type tagResponse struct {
 // on: empty owner/repo, transport failure, non-2xx response (including
 // 404 for absent repos), and JSON decode failure.
 func (f *httpTagsFetcher) LatestSemverTag(ctx context.Context, owner, repo string) (string, error) {
-	if owner == "" {
-		return "", errors.Errorf(ctx, "list tags: owner empty")
+	tags, err := f.collectTags(ctx, owner, repo)
+	if err != nil {
+		return "", err
 	}
-	if repo == "" {
-		return "", errors.Errorf(ctx, "list tags: repo empty")
+	names := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		names = append(names, tag.Name)
 	}
-
-	endpoint := fmt.Sprintf(
-		"%s/repos/%s/%s/tags?per_page=100",
-		f.apiBase, url.PathEscape(owner), url.PathEscape(repo),
-	)
-
-	names := []string{}
-	iterations := 0
-	for pageURL := endpoint; pageURL != ""; {
-		iterations++
-		if iterations > 100 {
-			return "", errors.Errorf(ctx, "list tags: too many pages")
-		}
-		pageNames, next, err := f.fetchPage(ctx, pageURL)
-		if err != nil {
-			return "", err
-		}
-		names = append(names, pageNames...)
-		pageURL = next
-	}
-
 	latest, ok := semver.Highest(names)
 	if !ok {
 		glog.V(2).Infof("list tags: %s/%s no usable semver tag (%d tags)", owner, repo, len(names))
@@ -126,12 +170,12 @@ func (f *httpTagsFetcher) LatestSemverTag(ctx context.Context, owner, repo strin
 }
 
 // fetchPage performs one HTTP GET for a single page of tags. It returns
-// the tag names from that page and the next-page URL (from the RFC 5988
+// the tag entries from that page and the next-page URL (from the RFC 5988
 // Link header), or "" when no "rel=next" link is present.
 func (f *httpTagsFetcher) fetchPage(
 	ctx context.Context,
 	pageURL string,
-) (names []string, nextURL string, err error) {
+) (tags []tagResponse, nextURL string, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
 	if err != nil {
 		return nil, "", errors.Wrapf(ctx, err, "list tags: build request")
@@ -171,16 +215,38 @@ func (f *httpTagsFetcher) fetchPage(
 	glog.V(2).Infof("list tags: GET %s status=%d bytes=%d", pageURL, resp.StatusCode, len(body))
 	glog.V(3).Infof("list tags: Link header: %q nextLink=%q", linkHdr, next)
 
-	var tags []tagResponse
-	if err := json.Unmarshal(body, &tags); err != nil {
+	var tagEntries []tagResponse
+	if err := json.Unmarshal(body, &tagEntries); err != nil {
 		return nil, "", errors.Wrapf(ctx, err, "list tags: decode json")
 	}
-	for _, tag := range tags {
-		names = append(names, tag.Name)
-	}
 
-	nextURL = nextLink(resp.Header.Get("Link"))
-	return names, nextURL, nil
+	return tagEntries, next, nil
+}
+
+// CommitSHAForTag implements TagsFetcher.
+func (f *httpTagsFetcher) CommitSHAForTag(
+	ctx context.Context,
+	owner, repo, tag string,
+) (string, error) {
+	if tag == "" {
+		return "", errors.Errorf(ctx, "commit sha for tag: tag empty")
+	}
+	tags, err := f.collectTags(ctx, owner, repo)
+	if err != nil {
+		return "", err
+	}
+	for _, entry := range tags {
+		if entry.Name != tag {
+			continue
+		}
+		if entry.Commit.SHA == "" {
+			return "", errors.Errorf(ctx, "commit sha for tag: %s has empty commit sha", tag)
+		}
+		glog.V(2).Infof("list tags: %s/%s tag=%s commit=%s", owner, repo, tag, entry.Commit.SHA)
+		return entry.Commit.SHA, nil
+	}
+	glog.V(2).Infof("list tags: %s/%s tag=%s not found (%d tags)", owner, repo, tag, len(tags))
+	return "", ErrTagNotFound
 }
 
 // nextLink parses an RFC 5988 Link header and returns the URL of the

@@ -16,7 +16,7 @@ After completing your implementation, review your own changes against each crite
 - The git writes (rewrite header, commit, tag, push) stay **deterministic Go** — the Claude/LLM step only ever *classifies* the bump, never authors the commit
 - Commits touch **`CHANGELOG.md` only** via an explicit pathspec — never `git add -A` / `git add .`
 - No new code path lets the agent write any file other than `CHANGELOG.md` during a release
-- Escalation contract preserved: a planning step that cannot proceed returns `NeedsInput`/`human_review` (assignee cleared, `previous_assignee: github-releaser-agent`) — never auto-advances to `done`
+- Escalation contract preserved: a planning step that cannot proceed returns `NeedsInput`/`human_review` (assignee cleared, `previous_assignee: github-releaser-agent`) — never auto-advances to `done`, except a SHA-verified nothing_to_release plan (spec 002): when a `P1_unreleased_not_first` failure coincides with GitHub reporting that the task `ref` IS the commit the current version's tag points at, planning writes `outcome: nothing_to_release` and returns `Done`/`NextPhase: done` with no escalation frontmatter. That exception requires a positive, observed match (hex-only, at least 7 characters, case-insensitive prefix); a mismatch, an absent tag, or any lookup error falls back to the escalation above
 
 ## Testing
 

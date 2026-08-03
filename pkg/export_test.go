@@ -30,3 +30,12 @@ var NormalizeCloneURLToHTTPSForTest = normalizeCloneURLToHTTPS
 // external _test package can exercise the token-prefix transformation
 // and the empty-token / non-HTTPS passthrough branches directly.
 var InjectTokenForTest = injectToken
+
+// SameCommitForTest exposes the unexported sameCommit helper so the
+// external _test package can exercise the four match bounds directly.
+var SameCommitForTest = sameCommit
+
+// ReleaseTagVerdictForTest exposes the unexported releaseTagVerdict helper
+// so the external _test package can assert the exact verdict token emitted
+// on each branch of the release-tag check.
+var ReleaseTagVerdictForTest = releaseTagVerdict

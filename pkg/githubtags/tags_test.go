@@ -335,4 +335,260 @@ var _ = Describe("httpTagsFetcher", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("too many pages"))
 	})
+
+	tagJSONWithCommits := func(entries [][2]string) string {
+		items := make([]map[string]any, len(entries))
+		for i, e := range entries {
+			items[i] = map[string]any{
+				"name":   e[0],
+				"commit": map[string]string{"sha": e[1]},
+			}
+		}
+		data, _ := json.Marshal(items)
+		return string(data)
+	}
+
+	It("19: dereferenced commit SHA for annotated tag (spec AC #10)", func() {
+		// The annotated tag OBJECT sha for v0.3.1 is 9aa07bf6c9a64221e340b5529f7e47faf2f189fd;
+		// the tags-list endpoint returns the COMMIT sha directly (7657fc0af1a115b2518ac4c4d332722d8fc3d35c),
+		// confirming GitHub dereferences annotated tags on this endpoint.
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(tagJSONWithCommits([][2]string{
+				{"v0.3.1", "7657fc0af1a115b2518ac4c4d332722d8fc3d35c"},
+				{"v0.3.0", "1111111111111111111111111111111111111111"},
+			})))
+		}))
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+		sha, err := fetcher.CommitSHAForTag(ctx, "bborbe", "tts-mcp", "v0.3.1")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sha).To(Equal("7657fc0af1a115b2518ac4c4d332722d8fc3d35c"))
+	})
+
+	It("20: lightweight tag — same code path", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(tagJSONWithCommits([][2]string{
+				{"v1.0.0", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+				{"v0.9.0", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			})))
+		}))
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+		sha, err := fetcher.CommitSHAForTag(ctx, "foo", "bar", "v0.9.0")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sha).To(Equal("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+	})
+
+	It("21: tag absent → ErrTagNotFound", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(tagJSONWithCommits([][2]string{
+				{"v0.3.1", "7657fc0af1a115b2518ac4c4d332722d8fc3d35c"},
+				{"v0.3.0", "1111111111111111111111111111111111111111"},
+			})))
+		}))
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+		sha, err := fetcher.CommitSHAForTag(ctx, "foo", "bar", "v9.9.9")
+
+		Expect(sha).To(BeEmpty())
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, githubtags.ErrTagNotFound)).To(BeTrue())
+	})
+
+	It("22: exact-match only (no v-prefix normalisation)", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(tagJSONWithCommits([][2]string{
+				{"v0.3.1", "7657fc0af1a115b2518ac4c4d332722d8fc3d35c"},
+			})))
+		}))
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+
+		// no v prefix
+		_, err := fetcher.CommitSHAForTag(ctx, "foo", "bar", "0.3.1")
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, githubtags.ErrTagNotFound)).To(BeTrue())
+
+		// capital V
+		_, err = fetcher.CommitSHAForTag(ctx, "foo", "bar", "V0.3.1")
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, githubtags.ErrTagNotFound)).To(BeTrue())
+	})
+
+	It("23: empty tag argument — no HTTP request", func() {
+		requestCount := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("[]"))
+		}))
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+		_, err := fetcher.CommitSHAForTag(ctx, "foo", "bar", "")
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("tag empty"))
+		Expect(requestCount).To(Equal(0))
+	})
+
+	It("24: empty owner / empty repo", func() {
+		server := httptest.NewServer(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}),
+		)
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+
+		_, err := fetcher.CommitSHAForTag(ctx, "", "bar", "v1.0.0")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("owner empty"))
+
+		_, err = fetcher.CommitSHAForTag(ctx, "foo", "", "v1.0.0")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("repo empty"))
+	})
+
+	It("25: non-2xx is hard error, NOT ErrTagNotFound", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}))
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+		_, err := fetcher.CommitSHAForTag(ctx, "foo", "bar", "v1.0.0")
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("status 503"))
+		Expect(errors.Is(err, githubtags.ErrTagNotFound)).To(BeFalse())
+	})
+
+	It("25b: 404 is hard error, NOT ErrTagNotFound", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+		_, err := fetcher.CommitSHAForTag(ctx, "foo", "bar", "v1.0.0")
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("status 404"))
+		Expect(errors.Is(err, githubtags.ErrTagNotFound)).To(BeFalse())
+	})
+
+	It("26: malformed JSON → decode error, NOT ErrTagNotFound", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("not-json"))
+		}))
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+		_, err := fetcher.CommitSHAForTag(ctx, "foo", "bar", "v1.0.0")
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("decode json"))
+		Expect(errors.Is(err, githubtags.ErrTagNotFound)).To(BeFalse())
+	})
+
+	It("27: entry with empty commit sha → hard error, NOT ErrTagNotFound", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(tagJSONWithCommits([][2]string{
+				{"v0.3.1", ""},
+			})))
+		}))
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+		_, err := fetcher.CommitSHAForTag(ctx, "foo", "bar", "v0.3.1")
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("empty commit sha"))
+		Expect(errors.Is(err, githubtags.ErrTagNotFound)).To(BeFalse())
+	})
+
+	It("28: pagination — tag lives on page 2", func() {
+		mux := http.NewServeMux()
+		var serverBase string
+		mux.HandleFunc("/repos/foo/bar/tags", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			page := r.URL.Query().Get("page")
+			if page == "" || page == "1" {
+				// Page 1: 100 unrelated tags + Link header pointing to page 2
+				var tags []map[string]any
+				for i := 0; i < 100; i++ {
+					tags = append(tags, map[string]any{
+						"name":   fmt.Sprintf("v0.100.%d", i),
+						"commit": map[string]string{"sha": fmt.Sprintf("aaaaaaaa%02d", i)},
+					})
+				}
+				nextURL := serverBase + "/repos/foo/bar/tags?page=2"
+				w.Header().Set("Link", "<"+nextURL+">; rel=\"next\"")
+				data, _ := json.Marshal(tags)
+				_, _ = w.Write(data)
+			} else {
+				// Page 2: target tag, no Link header
+				_, _ = w.Write([]byte(tagJSONWithCommits([][2]string{
+					{"v0.3.1", "7657fc0af1a115b2518ac4c4d332722d8fc3d35c"},
+				})))
+			}
+		})
+		server := httptest.NewServer(mux)
+		serverBase = server.URL
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+		sha, err := fetcher.CommitSHAForTag(ctx, "foo", "bar", "v0.3.1")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sha).To(Equal("7657fc0af1a115b2518ac4c4d332722d8fc3d35c"))
+	})
+
+	It("29: request cost — exactly one pagination", func() {
+		requestCount := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(tagJSONWithCommits([][2]string{
+				{"v1.0.0", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			})))
+		}))
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+		_, err := fetcher.CommitSHAForTag(ctx, "foo", "bar", "v1.0.0")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(requestCount).To(Equal(1))
+	})
+
+	It("30: auth header forwarded", func() {
+		var capturedAuth string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			capturedAuth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(tagJSONWithCommits([][2]string{
+				{"v1.0.0", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			})))
+		}))
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+		_, err := fetcher.CommitSHAForTag(ctx, "foo", "bar", "v1.0.0")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(capturedAuth).To(Equal("Bearer test-token"))
+	})
 })

@@ -12,6 +12,22 @@ import (
 )
 
 type TagsFetcher struct {
+	CommitSHAForTagStub        func(context.Context, string, string, string) (string, error)
+	commitSHAForTagMutex       sync.RWMutex
+	commitSHAForTagArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 string
+	}
+	commitSHAForTagReturns struct {
+		result1 string
+		result2 error
+	}
+	commitSHAForTagReturnsOnCall map[int]struct {
+		result1 string
+		result2 error
+	}
 	LatestSemverTagStub        func(context.Context, string, string) (string, error)
 	latestSemverTagMutex       sync.RWMutex
 	latestSemverTagArgsForCall []struct {
@@ -29,6 +45,73 @@ type TagsFetcher struct {
 	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
+}
+
+func (fake *TagsFetcher) CommitSHAForTag(arg1 context.Context, arg2 string, arg3 string, arg4 string) (string, error) {
+	fake.commitSHAForTagMutex.Lock()
+	ret, specificReturn := fake.commitSHAForTagReturnsOnCall[len(fake.commitSHAForTagArgsForCall)]
+	fake.commitSHAForTagArgsForCall = append(fake.commitSHAForTagArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 string
+	}{arg1, arg2, arg3, arg4})
+	stub := fake.CommitSHAForTagStub
+	fakeReturns := fake.commitSHAForTagReturns
+	fake.recordInvocation("CommitSHAForTag", []interface{}{arg1, arg2, arg3, arg4})
+	fake.commitSHAForTagMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3, arg4)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2
+	}
+	return fakeReturns.result1, fakeReturns.result2
+}
+
+func (fake *TagsFetcher) CommitSHAForTagCallCount() int {
+	fake.commitSHAForTagMutex.RLock()
+	defer fake.commitSHAForTagMutex.RUnlock()
+	return len(fake.commitSHAForTagArgsForCall)
+}
+
+func (fake *TagsFetcher) CommitSHAForTagCalls(stub func(context.Context, string, string, string) (string, error)) {
+	fake.commitSHAForTagMutex.Lock()
+	defer fake.commitSHAForTagMutex.Unlock()
+	fake.CommitSHAForTagStub = stub
+}
+
+func (fake *TagsFetcher) CommitSHAForTagArgsForCall(i int) (context.Context, string, string, string) {
+	fake.commitSHAForTagMutex.RLock()
+	defer fake.commitSHAForTagMutex.RUnlock()
+	argsForCall := fake.commitSHAForTagArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4
+}
+
+func (fake *TagsFetcher) CommitSHAForTagReturns(result1 string, result2 error) {
+	fake.commitSHAForTagMutex.Lock()
+	defer fake.commitSHAForTagMutex.Unlock()
+	fake.CommitSHAForTagStub = nil
+	fake.commitSHAForTagReturns = struct {
+		result1 string
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *TagsFetcher) CommitSHAForTagReturnsOnCall(i int, result1 string, result2 error) {
+	fake.commitSHAForTagMutex.Lock()
+	defer fake.commitSHAForTagMutex.Unlock()
+	fake.CommitSHAForTagStub = nil
+	if fake.commitSHAForTagReturnsOnCall == nil {
+		fake.commitSHAForTagReturnsOnCall = make(map[int]struct {
+			result1 string
+			result2 error
+		})
+	}
+	fake.commitSHAForTagReturnsOnCall[i] = struct {
+		result1 string
+		result2 error
+	}{result1, result2}
 }
 
 func (fake *TagsFetcher) LatestSemverTag(arg1 context.Context, arg2 string, arg3 string) (string, error) {
