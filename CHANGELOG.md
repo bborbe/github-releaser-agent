@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.4.2
 
 - fix(build): bump the Dockerfile build stage `golang:1.26.5` → `golang:1.26.6` to match `go.mod`. The maintainer v0.49.0 bump in v0.4.1 pulled that library's `go 1.26.6` requirement in via `go mod tidy`, but the image still pinned 1.26.5, so `make buca` failed with `go.mod requires go >= 1.26.6 (running go 1.26.5; GOTOOLCHAIN=local)`. `make precommit` could not catch it — it builds with the host toolchain, and only the container pins a Go version. v0.4.1 therefore has a git tag but no publishable image
 
