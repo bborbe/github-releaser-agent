@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- update Go to 1.26.6 and update dependencies (GO-2026-6179, GO-2026-6180)
+
 ## v0.4.0
 
 - feat(githubtags): add `TagsFetcher.CommitSHAForTag` — resolves a tag name to the commit SHA it points at via the tags-list endpoint (`commit.sha` is already dereferenced for annotated tags, so no second request), with an `ErrTagNotFound` sentinel for the tag-absent case and a shared `collectTags` pagination pass
