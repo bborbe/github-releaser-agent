@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- fix: bump `github.com/bborbe/maintainer` v0.48.0→v0.49.0, whose `ParseStrict` ignores unknown top-level namespaces instead of rejecting them. The agent's `maintainerconfig.Parse` aliases that strict parser, so any namespace newer than the pinned lib failed the whole config: `goUpdate:` produced `field goUpdate not found`, planning returned `error_category=invalid_config`, and the cleared assignee left the release task unretried — `bborbe/github-update-go-watcher` and `bborbe/go-skeleton` both stopped releasing silently on 2026-08-16. Second occurrence of this class after `release.allowFork`; typos inside a known namespace still fail loudly
+
 ## v0.4.0
 
 - feat(githubtags): add `TagsFetcher.CommitSHAForTag` — resolves a tag name to the commit SHA it points at via the tags-list endpoint (`commit.sha` is already dereferenced for annotated tags, so no second request), with an `ErrTagNotFound` sentinel for the tag-absent case and a shared `collectTags` pagination pass

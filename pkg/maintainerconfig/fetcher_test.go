@@ -198,6 +198,44 @@ var _ = Describe("httpFetcher", func() {
 		Expect(cfg.Release.AllowFork).To(BeTrue())
 	})
 
+	It("an unknown top-level namespace no longer fails the whole config", func() {
+		// Same failure class as the allowFork regression above, second
+		// occurrence. On 2026-08-16 `goUpdate:` was added to two repos'
+		// .maintainer.yaml; this agent's pinned lib predated the namespace,
+		// ParseStrict rejected the document with "field goUpdate not found",
+		// planning failed with error_category=invalid_config, and the task's
+		// assignee was cleared — so the release never tagged and never
+		// retried. bborbe/github-update-go-watcher and bborbe/go-skeleton both
+		// stopped releasing silently.
+		//
+		// The allowFork fix was another pin bump, which only moved the next
+		// occurrence forward. maintainer v0.49.0 removes the class: ParseStrict
+		// ignores namespaces it does not know, while still rejecting typos
+		// INSIDE a namespace it owns. `futureBot:` below is deliberately a
+		// namespace no released maintainer declares — this must keep passing
+		// as new bots are added, without another bump here.
+		yamlBytes := []byte(
+			"release:\n  autoRelease: true\ngoUpdate:\n  autoUpdate: true\nfutureBot:\n  enabled: true\n",
+		)
+		encoded := base64.StdEncoding.EncodeToString(yamlBytes)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"encoding": "base64",
+				"content":  encoded,
+			})
+		}))
+		defer server.Close()
+
+		fetcher := maintainerconfig.NewHTTPFetcherForTest("", server.URL)
+		data, err := fetcher.Fetch(ctx, "bborbe", "github-update-go-watcher", "master")
+		Expect(err).NotTo(HaveOccurred())
+
+		cfg, err := maintainerconfig.Parse(ctx, data)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Release.AutoRelease).To(BeTrue())
+	})
+
 	It("authorization header forwarded when token is set", func() {
 		var capturedAuth string
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
