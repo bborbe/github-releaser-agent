@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.4.3
 
 - chore: update dependencies (bborbe/agent v0.81.3, cqrs v0.6.7, errors v1.5.18, kafka v1.25.8, maintainer v0.49.1, sentry, service, time, vault-cli)
 
