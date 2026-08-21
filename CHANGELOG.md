@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- chore(build): run `gofmt -w` last in the `format` target so golines' wrapping is normalized before the gofmt lint check; bump `GOLANGCI_LINT_VERSION` v2.12.2 → v2.13.1 and `ERRCHECK_VERSION` v1.10.0 → v1.20.0 in `tools.env` for Go 1.27 toolchain compatibility
+
 ## v0.4.3
 
 - chore: update dependencies (bborbe/agent v0.81.3, cqrs v0.6.7, errors v1.5.18, kafka v1.25.8, maintainer v0.49.1, sentry, service, time, vault-cli)
