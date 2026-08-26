@@ -7,15 +7,15 @@ replace (
 )
 
 require (
-	github.com/bborbe/agent v0.83.0
+	github.com/bborbe/agent v0.83.1
 	github.com/bborbe/cqrs v0.6.8
-	github.com/bborbe/errors v1.5.20
+	github.com/bborbe/errors v1.5.21
 	github.com/bborbe/kafka v1.25.9
-	github.com/bborbe/maintainer v0.50.1
+	github.com/bborbe/maintainer v0.50.3
 	github.com/bborbe/sentry v1.9.27
 	github.com/bborbe/service v1.10.9
 	github.com/bborbe/time v1.27.10
-	github.com/bborbe/vault-cli v0.116.1
+	github.com/bborbe/vault-cli v0.116.2
 	github.com/golang/glog v1.2.5
 	github.com/onsi/ginkgo/v2 v2.32.1
 	github.com/onsi/gomega v1.42.1
@@ -28,15 +28,15 @@ require (
 	github.com/bborbe/argument/v2 v2.12.37 // indirect
 	github.com/bborbe/collection v1.20.24 // indirect
 	github.com/bborbe/http v1.26.24 // indirect
-	github.com/bborbe/k8s v1.14.14 // indirect
+	github.com/bborbe/k8s v1.14.16 // indirect
 	github.com/bborbe/kv v1.21.11 // indirect
-	github.com/bborbe/log v1.6.24 // indirect
-	github.com/bborbe/math v1.4.5 // indirect
+	github.com/bborbe/log v1.6.25 // indirect
+	github.com/bborbe/math v1.4.7 // indirect
 	github.com/bborbe/metrics v0.5.15 // indirect
 	github.com/bborbe/parse v1.10.21 // indirect
 	github.com/bborbe/run v1.9.37 // indirect
 	github.com/bborbe/strimzi v1.8.15 // indirect
-	github.com/bborbe/validation v1.4.22 // indirect
+	github.com/bborbe/validation v1.4.23 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bradleyfalzon/ghinstallation/v2 v2.19.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -44,11 +44,11 @@ require (
 	github.com/eapache/go-resiliency v1.7.0 // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.3 // indirect
-	github.com/getsentry/sentry-go v0.48.0 // indirect
+	github.com/getsentry/sentry-go v0.49.0 // indirect
 	github.com/go-errors/errors v1.5.1 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-openapi/jsonpointer v1.0.0 // indirect
-	github.com/go-openapi/jsonreference v1.0.0 // indirect
+	github.com/go-openapi/jsonreference v1.0.1 // indirect
 	github.com/go-openapi/swag v0.29.1 // indirect
 	github.com/go-openapi/swag/cmdutils v0.29.1 // indirect
 	github.com/go-openapi/swag/conv v0.29.1 // indirect
@@ -67,7 +67,7 @@ require (
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-github/v88 v88.0.0 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
-	github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3 // indirect
+	github.com/google/pprof v0.0.0-20260825171938-4d453200e7d9 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
