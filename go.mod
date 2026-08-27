@@ -26,7 +26,7 @@ require (
 	github.com/bborbe/argument/v2 v2.12.37 // indirect
 	github.com/bborbe/collection v1.20.24 // indirect
 	github.com/bborbe/http v1.26.24 // indirect
-	github.com/bborbe/k8s v1.14.15 // indirect
+	github.com/bborbe/k8s v1.14.16 // indirect
 	github.com/bborbe/kv v1.21.11 // indirect
 	github.com/bborbe/log v1.6.25 // indirect
 	github.com/bborbe/math v1.4.7 // indirect
