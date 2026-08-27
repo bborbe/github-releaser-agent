@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- chore: update go module dependencies
+
 ## v0.4.6
 
 - chore: update github.com/bborbe/agent to v0.83.1, github.com/bborbe/errors to v1.5.21, github.com/bborbe/maintainer to v0.50.3, github.com/bborbe/vault-cli to v0.116.2
