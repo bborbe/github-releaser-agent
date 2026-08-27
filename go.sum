@@ -44,8 +44,8 @@ github.com/bborbe/strimzi v1.8.15 h1:QmMCEOfX+TxyBYdwHT2JqbkqTuur1SeMmB2FCnH42MY
 github.com/bborbe/strimzi v1.8.15/go.mod h1:sQZZCeWljMmPWt1guOXAVIkIHnwz3sU8b/fpQd6J6CA=
 github.com/bborbe/time v1.27.10 h1:nKnZUam2Bi3VID51aQluoM2a0wjSdRVsqXKw2ZuCAyE=
 github.com/bborbe/time v1.27.10/go.mod h1:YnzX3PON6GzTFyGOZsk3BXeC7C/GnLahaY7pgUdi10Q=
-github.com/bborbe/validation v1.4.22 h1:tEBJ4tQq0cULlrkQubcxATlZN/+4LOUKCkbz5Zs/Lo0=
-github.com/bborbe/validation v1.4.22/go.mod h1:QD+Q6C+M0IEcvydQTDxyzYfxqD3BQ/vv+D7M2gWYUos=
+github.com/bborbe/validation v1.4.23 h1:pSNFesuedkAhHMWFwm2yz7+Tpsjh7dsTnbJdIhmVrx4=
+github.com/bborbe/validation v1.4.23/go.mod h1:jXYiRrsJgfUmj1BOxeFqmV/IF5vLEUC12US1B5MP3M8=
 github.com/bborbe/vault-cli v0.116.2 h1:Mxmc5orhQg+i8w7PNgtjGfp3wIPKbzY6rYQP5ECgzX4=
 github.com/bborbe/vault-cli v0.116.2/go.mod h1:X3R2OLko+zjdWZvn/ElTfwcAC+wpkPkKp8tAoefCLno=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
@@ -64,8 +64,8 @@ github.com/emicklei/go-restful/v3 v3.13.0 h1:C4Bl2xDndpU6nJ4bc1jXd+uTmYPVUwkD6bF
 github.com/emicklei/go-restful/v3 v3.13.0/go.mod h1:6n3XBCmQQb25CM2LCACGz8ukIrRry+4bhvbpWn3mrbc=
 github.com/fxamacker/cbor/v2 v2.9.3 h1:oQBnFATpNdY8gJHTndDDv5Xl4QqNaz51G5LLEPhng3Q=
 github.com/fxamacker/cbor/v2 v2.9.3/go.mod h1:vM4b+DJCtHn+zz7h3FFp/hDAI9WNWCsZj23V5ytsSxQ=
-github.com/getsentry/sentry-go v0.48.0 h1:FRZNr7Uk1C86ev1bSJmYlUkL9oyivQA6YOcdYfaaMmY=
-github.com/getsentry/sentry-go v0.48.0/go.mod h1:E5UkA5wp1qR2+MDydNYlVeUiNN2xEdjYMidkgf0Qoss=
+github.com/getsentry/sentry-go v0.49.0 h1:Ehejknu1l023Ub7QoRBVLAI7g3Jnhqku4oWx4B4Sh5s=
+github.com/getsentry/sentry-go v0.49.0/go.mod h1:nuMJAoCfe1u0Bts2ocyNI+TW8HT84vRMqwA5Qq/SKUI=
 github.com/gkampitakis/ciinfo v0.3.2 h1:JcuOPk8ZU7nZQjdUhctuhQofk7BGHuIy0c9Ez8BNhXs=
 github.com/gkampitakis/ciinfo v0.3.2/go.mod h1:1NIwaOcFChN4fa/B0hEBdAb6npDlFL8Bwx4dfRLRqAo=
 github.com/gkampitakis/go-snaps v0.5.20 h1:FGKonEeQPJ12t7RQj6cTPa881fl5c8HYarMLv5vP7sg=
