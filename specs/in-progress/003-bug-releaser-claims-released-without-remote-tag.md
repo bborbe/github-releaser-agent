@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-09-13T17:23:19Z"
 generating: "2026-09-13T17:57:40Z"
 prompted: "2026-09-13T17:57:40Z"
+verifying: "2026-09-13T18:07:42Z"
 branch: dark-factory/bug-releaser-claims-released-without-remote-tag
 ---
 
