@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [003-bug-releaser-claims-released-without-remote-tag]
+summary: 'Corrected the ResultOutput contract comment so outcome=released documents remote tag confirmation as the authority and outcome=failed names the new remote-verification failure sources; the required ## Unreleased changelog bullet was already present from the two preceding prompts and left intact.'
+execution_id: github-releaser-agent-exec-009-spec-003-result-contract-changelog
+dark-factory-version: v0.193.0
 created: "2026-09-13T19:55:00Z"
 queued: "2026-09-13T17:55:23Z"
+started: "2026-09-13T18:05:30Z"
+completed: "2026-09-13T18:07:42Z"
 ---
 
 # Record the remote-verified release outcome in the changelog and correct the Result contract comment

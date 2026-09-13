@@ -11,8 +11,14 @@ import "github.com/bborbe/github-releaser-agent/pkg/git"
 // agentlib.MarshalSectionTyped + agentlib.ExtractSection[ResultOutput].
 //
 // Two shapes are valid:
-//   - Outcome="released" — direct-push succeeded; CommitSHA + Tag populated; ErrorCategory empty
-//   - Outcome="failed"   — any failure; ErrorCategory + Error populated; CommitSHA + Tag empty
+//   - Outcome="released" — the remote confirms the planned tag at the released
+//     commit; CommitSHA + Tag populated; ErrorCategory empty. The remote is the
+//     authority, not the local push call: a push that reported success is only
+//     `released` once the tag is observed there.
+//   - Outcome="failed"   — any failure; ErrorCategory + Error populated;
+//     CommitSHA + Tag empty. Covers a rejected push whose tag never lands on the
+//     remote, a review rejection that never pushed, a tag the remote does not
+//     carry at the expected commit, and a remote that could not be verified.
 //
 // Future fields require a spec amendment.
 type ResultOutput struct {
