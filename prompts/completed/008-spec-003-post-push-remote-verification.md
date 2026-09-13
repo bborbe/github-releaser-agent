@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [003-bug-releaser-claims-released-without-remote-tag]
+summary: 'ai-review now verifies the pushed tag against the remote once and derives ## Result from the observed SHA, keeping `released` only on a confirmed prefix match and parking unconfirmed releases for a human'
+execution_id: github-releaser-agent-exec-008-spec-003-post-push-remote-verification
+dark-factory-version: v0.193.0
 created: "2026-09-13T19:50:00Z"
 queued: "2026-09-13T17:55:23Z"
+started: "2026-09-13T18:01:01Z"
+completed: "2026-09-13T18:05:29Z"
 ---
 
 # Verify the pushed tag on the remote and reconcile the task's Result block

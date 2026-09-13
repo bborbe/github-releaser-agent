@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 - fix: execution post-check compares the observed full remote SHA against the recorded short SHA by prefix instead of exact equality, so a landed release is verdicted `released` rather than mis-verdicted `superseded` (the short SHA from `git rev-parse --short HEAD` can never equal the remote's 40-char SHA)
+- fix: ai-review verifies the pushed tag against the remote before claiming a release — after `Push` it consults `refs/tags/<tag>` once, and `## Result` reads `released` only when the observed remote SHA prefix-matches the recorded `commit_sha`. A push that reported success but whose tag the remote does not confirm is downgraded to the `failed` shape and parked for a human; a push error whose tag the remote does confirm keeps `released` and records the push error on the review. An unreachable remote is fail-closed (non-success, parked). The `!approved` review-override path reconciles from the observation it already made and never re-asks the remote.
 
 ## v0.4.10
 

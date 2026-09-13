@@ -169,13 +169,24 @@ func (s *aiReviewStep) ShouldRun(_ context.Context, _ *agentlib.Markdown) (bool,
 //     Plan.OriginalUnreleased against the body of
 //     plan.NextVersionHeader in <Workdir>/CHANGELOG.md.
 //  6. Roll up overall verdict; write ## Review.
-//  7. When Approved: call ops.Push. On Push error: still write
-//     ## Review (with a "push failed" note), set Approved=false,
-//     return Failed/human_review.
-//  8. On `!approved`: consult `LsRemote`. If the remote shows the tag
-//     at the agent's expected SHA (or at any SHA, for the superseded
-//     case), write `## Review Warning` + close as `completed`.
-//     Otherwise, the existing `human_review` path stands.
+//  7. When Approved: call ops.Push, then consult the remote ONCE for
+//     the planned tag and reconcile ## Result against the observation.
+//     On Push error: still write ## Review (with a "push failed"
+//     note), set Approved=false, return Failed/human_review — and the
+//     remote stays the authority on whether the release landed (an
+//     error-but-landed push keeps `released`). A push that reported
+//     success but whose tag the remote does not confirm at the
+//     expected commit is downgraded to the non-success shape and
+//     parked for a human.
+//  8. On `!approved`: consult `LsRemote` ONCE via checkReviewOverride.
+//     If the remote shows the tag at the agent's expected SHA the
+//     `## Review Warning` override closes the task `completed`; a tag
+//     at a DIFFERENT SHA also closes `completed` but downgrades
+//     ## Result (superseded). An absent tag or a failed consult
+//     downgrades ## Result and leaves the existing `human_review`
+//     path standing. The decision reconciles from the observation
+//     checkReviewOverride already made — the remote is never asked
+//     twice for the same decision.
 //  9. Workdir cleanup: deferred via workdirShouldCleanup sentinel —
 //     the workdir is removed on BOTH terminal transitions (Done and
 //     human_review) AFTER ## Review has been written.
@@ -252,27 +263,84 @@ func (s *aiReviewStep) Run(ctx context.Context, md *agentlib.Markdown) (*agentli
 
 	// (5) Push gating — only on Approved branch.
 	if !output.Approved {
-		// Spec 064 DB #7: a review rejection that coincides with a
-		// confirmed remote tag at the agent's expected SHA does not
-		// flip the task to `failed`. The review verdict is preserved
-		// as a recorded warning in ## Review Warning, and the task
-		// closes as `completed` (the post-check from prompt 2 also
-		// upgrades the verdict — this branch is its ai_review-side
-		// mirror for the case where the execution-step post-check
-		// did NOT fire because the remote was empty at the time of
-		// execution, but is now non-empty by the time ai_review runs).
-		if warning := s.checkReviewOverride(ctx, md, &output, result); warning != nil {
-			return s.finishReviewOverride(
-				ctx,
-				md,
-				output,
-				warning,
-				&workdirShouldCleanup,
-			)
-		}
-		return s.finishHumanReview(ctx, md, output, &workdirShouldCleanup)
+		return s.finishNotApproved(ctx, md, result, output, &workdirShouldCleanup)
 	}
 	return s.finishApproved(ctx, md, result, output, &workdirShouldCleanup)
+}
+
+// finishNotApproved is the `!approved` terminal branch. It consults the
+// remote once via checkReviewOverride and reconciles ## Result from the
+// observation that consult already produced — the remote is never asked
+// twice for the same decision.
+//
+// Spec 064 DB #7: a review rejection that coincides with a confirmed
+// remote tag does not flip the task to `failed`. The review verdict is
+// preserved as a recorded warning in ## Review Warning, and the task
+// closes as `completed` (the post-check from prompt 2 also upgrades the
+// verdict — this branch is its ai_review-side mirror for the case where
+// the execution-step post-check did NOT fire because the remote was empty
+// at the time of execution, but is now non-empty by the time ai_review
+// runs).
+//
+// Reconciliation layers on top of that sub-decision without changing it:
+//   - tag confirmed at the expected commit → `released` stands, no rewrite.
+//   - tag present at a DIFFERENT commit → ## Result downgraded (superseded)
+//     while the task still closes `completed` — the page no longer claims
+//     this task's commit shipped the version.
+//   - tag absent / consult errored → ## Result downgraded and the existing
+//     `human_review` path stands (it was already the routing).
+//   - consult skipped (missing clone_url / ref / tag) → no-op, unchanged.
+func (s *aiReviewStep) finishNotApproved(
+	ctx context.Context,
+	md *agentlib.Markdown,
+	result *ResultOutput,
+	output ReviewOutput,
+	workdirShouldCleanup *bool,
+) (*agentlib.Result, error) {
+	warning, obs := s.checkReviewOverride(ctx, md, &output, result)
+	if !obs.Consulted {
+		// The remote was never asked (missing clone_url / ref / tag) —
+		// no reconciliation may run on that observation. The routing is
+		// the pre-existing human_review path.
+		return s.finishHumanReview(ctx, md, output, workdirShouldCleanup)
+	}
+	// The consult-confirmed-at-expected-commit case needs no rewrite.
+	confirmed := obs.Err == nil && obs.SHA != "" &&
+		strings.HasPrefix(obs.SHA, result.CommitSHA)
+	// A tag the remote does carry, but at a different commit, is the
+	// superseded case — the page must name the commit the remote
+	// actually shows rather than the agent's expected one.
+	superseded := !confirmed && obs.Err == nil && obs.SHA != ""
+	if !confirmed {
+		if err := s.writeFailureResult(
+			ctx,
+			md,
+			git.ErrorCategoryUnknown,
+			notApprovedFailureMessage(output, obs, result, superseded),
+		); err != nil {
+			return nil, err
+		}
+	}
+	if warning != nil {
+		return s.finishReviewOverride(ctx, md, output, warning, workdirShouldCleanup)
+	}
+	return s.finishHumanReview(ctx, md, output, workdirShouldCleanup)
+}
+
+// notApprovedFailureMessage builds the ## Result error text for the
+// `!approved` downgrade rows. A superseded tag names the commit the
+// remote actually shows; every other row names the failed checks so the
+// page explains why the review rejected the release.
+func notApprovedFailureMessage(
+	output ReviewOutput,
+	obs remoteObservation,
+	result *ResultOutput,
+	superseded bool,
+) string {
+	if superseded {
+		return "superseded: remote tag " + result.LocalTag + " points at " + obs.SHA
+	}
+	return output.Notes
 }
 
 // cleanupWorkdir is the deferred cleanup. The sentinel is set at
@@ -287,9 +355,13 @@ func (s *aiReviewStep) cleanupWorkdir(result *ResultOutput, workdirShouldCleanup
 	}
 }
 
-// finishApproved executes the push step. On push failure it falls
-// through to finishHumanReview with an updated note; on success it
-// returns Done.
+// finishApproved executes the push step and then verifies the push
+// against the remote. The remote is the authority: `released` survives
+// only when the remote carries the planned tag at the recorded short
+// SHA. A push that reported success but whose tag the remote does not
+// confirm is downgraded to the non-success shape and parked for a
+// human; a push that errored but whose tag the remote confirms keeps
+// `released` and only records the push error on the review.
 func (s *aiReviewStep) finishApproved(
 	ctx context.Context,
 	md *agentlib.Markdown,
@@ -308,6 +380,24 @@ func (s *aiReviewStep) finishApproved(
 		output.Notes = "push failed: " + pushErr.Error()
 		output.Approved = false
 		output.FailedChecks = append(output.FailedChecks, CheckPush)
+	}
+	// One consult per decision — the post-push observation is derived
+	// here and never re-asked inside the reconciliation.
+	obs := s.consultRemoteTag(ctx, md, result.LocalTag)
+	confirmed, downgrade, err := s.reconcilePostPush(ctx, md, result, obs, pushErr)
+	if err != nil {
+		return nil, err
+	}
+	if downgrade != "" {
+		// The review must not read "all checks passed" while ## Result
+		// says failed — carry the downgrade reason into the notes. When
+		// the push itself failed its own note stays authoritative.
+		output.Notes = downgrade
+	}
+	// A failed push keeps its existing routing; a push that reported
+	// success but whose tag the remote does not confirm is parked for a
+	// human rather than closed Done.
+	if pushErr != nil || (obs.Consulted && !confirmed) {
 		return s.finishHumanReview(ctx, md, output, workdirShouldCleanup)
 	}
 	section, err := agentlib.MarshalSectionTyped(ctx, "## Review", output)
@@ -320,6 +410,168 @@ func (s *aiReviewStep) finishApproved(
 		Status:    agentlib.AgentStatusDone,
 		NextPhase: "done",
 	}, nil
+}
+
+// reconcilePostPush derives the ## Result outcome from the post-push
+// remote observation and writes the downgrade when the remote does not
+// confirm the release.
+//
+// It returns confirmed=true only when the remote carries the planned tag
+// at the recorded short SHA (the `released` outcome survives). The second
+// return value is the ## Result error text — empty when `released` was
+// kept — so the caller can carry the same reason into the review notes.
+// The error is non-nil only when the downgrade write itself fails.
+//
+// Outcomes by row of the post-push decision table:
+//   - consult skipped (missing clone_url / ref / tag) → no rewrite.
+//   - tag present at the expected commit (prefix match) → no rewrite;
+//     `released` is KEPT even when the push reported an error, because
+//     the remote is the authority.
+//   - tag present at a different commit → downgrade, error names the
+//     observed SHA.
+//   - tag absent → downgrade, error names the push error when there was
+//     one (with its classified category) or the missing tag otherwise.
+//   - consult errored → downgrade, fail-closed: "remote verification
+//     failed: ..." with the classified category of the consult error.
+func (s *aiReviewStep) reconcilePostPush(
+	ctx context.Context,
+	md *agentlib.Markdown,
+	result *ResultOutput,
+	obs remoteObservation,
+	pushErr error,
+) (confirmed bool, downgrade string, err error) {
+	if !obs.Consulted {
+		return false, "", nil
+	}
+	taskID, _ := md.Frontmatter.String("task_identifier")
+	confirmed = obs.Err == nil && obs.SHA != "" &&
+		strings.HasPrefix(obs.SHA, result.CommitSHA)
+	outcome := ResultOutcomeFailed
+	if confirmed {
+		outcome = ResultOutcomeReleased
+	}
+	glog.V(2).Infof(
+		"ai_review post-push: task_id=%s tag=%s observed_remote_sha=%s outcome=%s err=%s",
+		taskID,
+		result.LocalTag,
+		obs.SHA,
+		outcome,
+		git.RedactToken(errorText(obs.Err)),
+	)
+	if confirmed {
+		return true, "", nil
+	}
+	category, message := classifyPostPushFailure(obs, pushErr, result)
+	if err := s.writeFailureResult(ctx, md, category, message); err != nil {
+		return false, "", err
+	}
+	if pushErr != nil {
+		// The push-error row keeps its own review note ("push failed: …");
+		// returning an empty downgrade leaves it intact.
+		return false, "", nil
+	}
+	return false, message, nil
+}
+
+// classifyPostPushFailure maps a failed post-push observation onto the
+// ## Result error category + message. The tag-at-a-different-commit and
+// tag-absent rows have no git error to classify and pass
+// git.ErrorCategoryUnknown explicitly (git.ClassifyError(nil) returns the
+// empty sentinel, which omitempty would silently drop).
+func classifyPostPushFailure(
+	obs remoteObservation,
+	pushErr error,
+	result *ResultOutput,
+) (git.ErrorCategory, string) {
+	if obs.Err != nil {
+		return git.ClassifyError(
+			obs.Err,
+		), "remote verification failed: " + obs.Err.Error()
+	}
+	if obs.SHA != "" {
+		return git.ErrorCategoryUnknown, "superseded: remote tag " + result.LocalTag +
+			" points at " + obs.SHA
+	}
+	if pushErr != nil {
+		return git.ClassifyError(pushErr), pushErr.Error()
+	}
+	return git.ErrorCategoryUnknown, "remote does not carry tag " + result.LocalTag
+}
+
+// errorText returns err.Error() or "" for a nil error — used to keep the
+// reconciliation log line free of a nil-pointer dereference.
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// remoteObservation is the outcome of one remote consult. Consulted=false
+// means the skip guard fired (missing clone_url / ref / tag) and the remote
+// was never asked — no reconciliation may run on that observation.
+type remoteObservation struct {
+	Consulted bool
+	SHA       string
+	Err       error
+}
+
+// consultRemoteTag asks the remote which commit, if any, sits at
+// refs/tags/<tag>. It mirrors checkReviewOverride's auth + timeout model:
+// authed URL from the task frontmatter, bounded by the existing
+// lsRemoteTimeout. It NEVER calls ClassifyError and never retries.
+//
+// The tag argument is the BARE tag (e.g. "v1.0.0") — LsRemote prepends
+// "refs/tags/" itself, so passing the prefixed form would query
+// refs/tags/refs/tags/<tag>.
+func (s *aiReviewStep) consultRemoteTag(
+	ctx context.Context,
+	md *agentlib.Markdown,
+	tag string,
+) remoteObservation {
+	cloneURL, _ := md.Frontmatter.String("clone_url")
+	ref, _ := md.Frontmatter.String("ref")
+	if cloneURL == "" || ref == "" || tag == "" {
+		return remoteObservation{Consulted: false}
+	}
+	authedURL := injectToken(normalizeCloneURLToHTTPS(cloneURL), s.ghToken)
+	// Bound the network round-trip — a stalled GitHub must not block
+	// the review step indefinitely.
+	lsCtx, cancel := context.WithTimeout(ctx, lsRemoteTimeout)
+	defer cancel()
+	sha, err := s.ops.LsRemote(lsCtx, authedURL, ref, tag)
+	return remoteObservation{Consulted: true, SHA: sha, Err: err}
+}
+
+// writeFailureResult rewrites the ## Result section to the documented
+// non-success shape: Outcome=failed, Path=direct-push, ErrorCategory +
+// Error populated, CommitSHA / Tag / Workdir / LocalTag empty (the
+// two-shape contract in pkg/result_output.go).
+//
+// It touches ONLY ## Result — never ## Review, ## Review Warning, or the
+// frontmatter. Callers must pass a non-empty category: git.ClassifyError
+// returns the empty sentinel for a nil error, which omitempty would
+// silently drop from the emitted JSON.
+func (s *aiReviewStep) writeFailureResult(
+	ctx context.Context,
+	md *agentlib.Markdown,
+	category git.ErrorCategory,
+	message string,
+) error {
+	output := ResultOutput{
+		Outcome:       ResultOutcomeFailed,
+		Path:          ResultPathDirectPush,
+		ErrorCategory: category,
+		Error:         message,
+	}
+	section, err := agentlib.MarshalSectionTyped(ctx, "## Result", output)
+	if err != nil {
+		// Failing to marshal the failure is a real error — surface it so
+		// the framework records the panic-equivalent rather than swallowing.
+		return errors.Wrapf(ctx, err, "ai_review: marshal ## Result section (failed)")
+	}
+	md.ReplaceSection(section)
+	return nil
 }
 
 // finishHumanReview writes the ## Review section (with the failed
@@ -347,19 +599,19 @@ func (s *aiReviewStep) finishHumanReview(
 }
 
 // checkReviewOverride is the spec-064 ai_review-side sub-decision on
-// the `!approved` path. It consults the remote via git.LsRemote to
-// confirm whether the planned version's tag is already at the agent's
-// expected SHA (a release was already published) or at a different
-// SHA (a later release won the slot).
+// the `!approved` path. It consults the remote ONCE (via
+// consultRemoteTag) to confirm whether the planned version's tag is
+// already at the agent's expected SHA (a release was already published)
+// or at a different SHA (a later release won the slot).
 //
 // On a non-empty observed SHA it returns a populated
 // *ReviewWarningOutput; the caller (Run) will route to
 // finishReviewOverride which writes the ## Review Warning block and
 // closes the task as `completed`. On an empty result or LsRemote
 // error it returns nil — the existing human_review path stands
-// unchanged. The authed URL is built via the shared package-level
-// helpers (mirror the execution step's auth model). On any error the
-// err message is passed through RedactToken before logging so a
+// unchanged. The second return value is the raw observation, which the
+// caller reconciles ## Result against WITHOUT asking the remote again;
+// the error message is passed through RedactToken before logging so a
 // leak of the GitHub auth token in the wrapped stderr cannot reach
 // the log stream.
 func (s *aiReviewStep) checkReviewOverride(
@@ -367,45 +619,38 @@ func (s *aiReviewStep) checkReviewOverride(
 	md *agentlib.Markdown,
 	output *ReviewOutput,
 	result *ResultOutput,
-) *ReviewWarningOutput {
-	cloneURL, _ := md.Frontmatter.String("clone_url")
-	ref, _ := md.Frontmatter.String("ref")
-	if cloneURL == "" || ref == "" || result.LocalTag == "" {
-		return nil
+) (*ReviewWarningOutput, remoteObservation) {
+	obs := s.consultRemoteTag(ctx, md, result.LocalTag)
+	if !obs.Consulted {
+		return nil, obs
 	}
-	authedURL := injectToken(normalizeCloneURLToHTTPS(cloneURL), s.ghToken)
-	// Bound the network round-trip — a stalled GitHub must not block
-	// the review step indefinitely.
-	lsCtx, cancel := context.WithTimeout(ctx, lsRemoteTimeout)
-	defer cancel()
-	sha, err := s.ops.LsRemote(lsCtx, authedURL, ref, result.LocalTag)
-	if err != nil {
+	if obs.Err != nil {
 		glog.V(2).Infof(
 			"ai_review review-override: tag=%s err=%s",
 			result.LocalTag,
-			git.RedactToken(err.Error()),
+			git.RedactToken(obs.Err.Error()),
 		)
-		return nil
+		return nil, obs
 	}
-	if sha == "" {
+	if obs.SHA == "" {
 		glog.V(2).Infof(
 			"ai_review review-override: tag=%s sha=empty (no override)",
 			result.LocalTag,
 		)
-		return nil
+		return nil, obs
 	}
 	failedChecks := append([]string{}, output.FailedChecks...)
 	note := fmt.Sprintf(
 		"review rejected (%s) but remote confirms release at %s",
 		strings.Join(failedChecks, ","),
-		sha,
+		obs.SHA,
 	)
 	return &ReviewWarningOutput{
 		FailedChecks:      failedChecks,
 		PlannedVersion:    result.LocalTag,
-		ObservedRemoteSHA: sha,
+		ObservedRemoteSHA: obs.SHA,
 		Note:              note,
-	}
+	}, obs
 }
 
 // finishReviewOverride writes BOTH the existing ## Review section
