@@ -431,9 +431,10 @@ func (s *executionStep) guardCommittedFiles(
 // ls-remote on the same authed URL the success path used. The post-
 // check on the failure path is superseded-only: the local commit/tag
 // step never produced a SHA that could match the remote tag, so the
-// "released" verdict (which requires sha == expectedSHA) is by
-// construction unreachable here. A non-empty remote SHA means a later
-// release already won the slot — that's the superseded case.
+// "released" verdict (which requires the observed full SHA to start
+// with the expected short SHA) is by construction unreachable here. A
+// non-empty remote SHA means a later release already won the slot —
+// that's the superseded case.
 func (s *executionStep) fail(
 	ctx context.Context,
 	md *agentlib.Markdown,
@@ -503,10 +504,13 @@ func (s *executionStep) fail(
 //     if any, sits at refs/tags/<tag> for the planned version. The
 //     authed URL is the same one the success path's Clone used — token
 //     injection happens at the call site, not here.
-//  3. Compares the observed SHA against the agent's expected SHA when
-//     available. On the failure path the expected SHA is empty — any
-//     non-empty observed SHA still fires the superseded branch (a
-//     later release won the slot).
+//  3. Compares the observed SHA against the agent's expected SHA by
+//     prefix (`observed` starts with `expected`): the recorded SHA is
+//     the short one from `git rev-parse --short HEAD`, while the remote
+//     reports the full 40-char SHA. An empty expected SHA keeps the
+//     superseded-only behaviour — on the failure path the expected SHA
+//     is empty, so any non-empty observed SHA still fires the
+//     superseded branch (a later release won the slot).
 //  4. Upgrades the verdict: writes a ## Resolution block (replacing any
 //     existing copy), rewrites md.Frontmatter["status"]="completed" and
 //     ["phase"]="done", and emits one structured log line via
@@ -606,9 +610,13 @@ func (s *executionStep) postCheck(
 		return
 	}
 
-	// 3. Compare observed vs expected.
+	// 3. Compare observed vs expected by prefix. `expectedSHA` is the short
+	// SHA from `git rev-parse --short HEAD`; the remote reports the full
+	// 40-char SHA. Exact equality can never hold, so the released verdict
+	// would be unreachable. An empty expected SHA keeps the superseded-only
+	// behaviour (the failure path passes "").
 	verdict := ResolutionVerdictSuperseded
-	if expectedSHA != "" && sha == expectedSHA {
+	if expectedSHA != "" && strings.HasPrefix(sha, expectedSHA) {
 		verdict = ResolutionVerdictReleased
 	}
 

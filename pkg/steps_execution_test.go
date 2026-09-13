@@ -1641,6 +1641,75 @@ task_identifier: gh-release-bborbe-example-master-plugin
 		)
 
 		It(
+			"ShortExpectedMatchesFullObserved: full remote SHA whose prefix is the recorded short SHA → verdict=released",
+			func() {
+				fakeOps, md := sharedHappySetup()
+				// The remote reports the full 40-char SHA; Commit returned
+				// the 7-char short SHA "abc1234". A prefix comparison is
+				// the only way the released verdict is reachable.
+				fakeOps.LsRemoteReturns("abc1234e3cca37862f4e612a7b14c4e00af6b935", nil)
+
+				step := pkg.NewExecutionStep(fakeOps, "test-token")
+				result, err := step.Run(context.Background(), md)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+
+				Expect(fakeOps.LsRemoteCallCount()).To(Equal(1))
+
+				Expect(md.Frontmatter["status"]).To(Equal("completed"))
+				Expect(md.Frontmatter["phase"]).To(Equal("done"))
+
+				got, err := agentlib.ExtractSection[pkg.ResolutionOutput](
+					context.Background(),
+					md,
+					"## Resolution",
+				)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(got.Verdict).To(Equal(pkg.ResolutionVerdictReleased))
+				Expect(got.PlannedVersion).To(Equal("v1.2.8"))
+				Expect(got.ObservedRemoteSHA).To(Equal("abc1234e3cca37862f4e612a7b14c4e00af6b935"))
+
+				// The post-check appends ## Resolution; ## Result(released)
+				// still stands unchanged.
+				resultOutput, err := agentlib.ExtractSection[pkg.ResultOutput](
+					context.Background(),
+					md,
+					"## Result",
+				)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(resultOutput.Outcome).To(Equal("released"))
+			},
+		)
+
+		It(
+			"DifferentCommitSuperseded: full remote SHA for a different commit → verdict=superseded",
+			func() {
+				fakeOps, md := sharedHappySetup()
+				// Full 40-char SHA that does NOT start with "abc1234" —
+				// a genuinely different commit keeps the downgrade branch.
+				fakeOps.LsRemoteReturns("deadbeef1234567890abcdef1234567890abcdef", nil)
+
+				step := pkg.NewExecutionStep(fakeOps, "test-token")
+				result, err := step.Run(context.Background(), md)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+
+				Expect(md.Frontmatter["status"]).To(Equal("completed"))
+				Expect(md.Frontmatter["phase"]).To(Equal("done"))
+
+				got, err := agentlib.ExtractSection[pkg.ResolutionOutput](
+					context.Background(),
+					md,
+					"## Resolution",
+				)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(got.Verdict).To(Equal(pkg.ResolutionVerdictSuperseded))
+				Expect(got.PlannedVersion).To(Equal("v1.2.8"))
+				Expect(got.ObservedRemoteSHA).To(Equal("deadbeef1234567890abcdef1234567890abcdef"))
+			},
+		)
+
+		It(
 			"LsRemote returns (\"\", nil) → post-check no-op, existing ## Result(released) stands, no ## Resolution",
 			func() {
 				fakeOps, md := sharedHappySetup()
