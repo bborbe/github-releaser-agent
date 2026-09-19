@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.4.12
 
 - fix: `LsRemote` queries `refs/tags/<tag>*` instead of the exact ref, so git emits the peeled `refs/tags/<tag>^{}` line. With an exact ref, git returns a single line for an **annotated** tag carrying the TAG OBJECT sha — and `ai_review` compares that value against a commit sha (`strings.HasPrefix(obs.SHA, result.CommitSHA)`), which can never match a tag-object sha. Every release was therefore mis-verdicted `superseded` and reported `failed` even though the tag had landed, and the controller's retries then failed with `unreleased_not_found` because `## Unreleased` was already consumed. Since `GitOps.Tag` supports annotated tags only, this affected every release. Same failure shape as the v0.4.11 short-vs-full SHA fix one layer down: there the two values differed in length, here in object kind, so the prefix comparison does not rescue it. Widening the pattern is safe — `parseLsRemoteOutput` matches on the exact `refs/tags/<tag>` / `^{}` suffixes, so siblings the glob also matches (e.g. `v2.40.0-rc0`) are discarded.
 
