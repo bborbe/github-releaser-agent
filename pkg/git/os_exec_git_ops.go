@@ -185,17 +185,36 @@ func (g *osExecGitOps) CommittedFiles(ctx context.Context, workdir string) ([]st
 	return files, nil
 }
 
-// LsRemote shells out `git ls-remote <cloneURL> refs/tags/<tag>` and returns
+// LsRemote shells out `git ls-remote <cloneURL> refs/tags/<tag>*` and returns
 // the dereferenced commit SHA. For an annotated tag, the `^{}` line wins;
 // for a lightweight tag, the only emitted line is returned. A missing tag
 // on the remote returns ("", nil) — the caller treats that as a no-op.
+//
+// The trailing `*` is load-bearing, not decoration. Git emits the peeled
+// `refs/tags/<tag>^{}` line only for a WILDCARD match. Querying the exact ref
+// `refs/tags/<tag>` yields a single line, and for an annotated tag that line
+// carries the TAG OBJECT sha, not the commit — while every caller here treats
+// the return value as a commit sha. Verified 2026-09-19:
+//
+//	git ls-remote <url> refs/tags/v2.40.0    → one line (tag object)
+//	git ls-remote <url> 'refs/tags/v2.40.0*' → both lines (tag object + ^{})
+//
+// Without the glob the `^{}` branch in parseLsRemoteOutput can never fire, so
+// an annotated tag silently yields a tag-object sha. Because ai_review compares
+// that value against a commit sha (strings.HasPrefix(obs.SHA, result.CommitSHA)),
+// every release was misclassified `superseded` and reported failed.
+//
+// Widening the pattern is safe: parseLsRemoteOutput matches on the exact
+// `refs/tags/<tag>` / `refs/tags/<tag>^{}` suffixes, so siblings the glob also
+// matches (e.g. v2.40.0-rc0) are discarded.
 func (g *osExecGitOps) LsRemote(ctx context.Context, cloneURL, ref, tag string) (string, error) {
-	// git ls-remote <cloneURL> refs/tags/<tag>
+	// git ls-remote <cloneURL> 'refs/tags/<tag>*'
 	// cloneURL is authed by caller from validated frontmatter; tag comes from
 	// plan.NextVersionHeader which the planning step validated. The full
-	// ref-path is a separate argv element — Git itself does the ref-expansion.
+	// ref-path is a separate argv element — Git itself does the ref-expansion,
+	// and no shell is involved, so the glob reaches git verbatim.
 	// #nosec G204 -- cloneURL is authed by caller from validated frontmatter; tag comes from plan.NextVersionHeader which the planning step validated
-	cmd := exec.CommandContext(ctx, "git", "ls-remote", cloneURL, "refs/tags/"+tag)
+	cmd := exec.CommandContext(ctx, "git", "ls-remote", cloneURL, "refs/tags/"+tag+"*")
 	cmd.Env = g.cmdEnv()
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
