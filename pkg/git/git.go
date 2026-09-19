@@ -62,7 +62,7 @@ type GitOps interface {
 	// touch CHANGELOG.md and nothing else.
 	CommittedFiles(ctx context.Context, workdir string) ([]string, error)
 
-	// LsRemote shells out `git ls-remote <cloneURL> refs/tags/<tag>` and
+	// LsRemote shells out `git ls-remote <cloneURL> 'refs/tags/<tag>*'` and
 	// returns the dereferenced commit SHA for the tag.
 	//
 	// For an annotated tag, git emits TWO lines for refs/tags/<tag>:
@@ -71,6 +71,12 @@ type GitOps interface {
 	// LsRemote MUST return the commit-sha (the ^{} line). For a lightweight
 	// tag where git emits only the first line, that SHA is returned (it IS
 	// the commit SHA for lightweight tags).
+	//
+	// The trailing `*` in the ref pattern is REQUIRED, not cosmetic: git emits
+	// the peeled ^{} line only for a wildcard match. With the exact ref
+	// `refs/tags/<tag>`, an annotated tag returns ONE line carrying the TAG
+	// OBJECT sha — which is not a commit sha, and silently breaks every caller
+	// that compares it against one.
 	//
 	// When the remote has no refs/tags/<tag> at all, returns ("", nil) — the
 	// caller treats this as a no-op. The empty result is NOT an error.

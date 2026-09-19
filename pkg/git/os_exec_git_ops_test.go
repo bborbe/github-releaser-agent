@@ -70,6 +70,83 @@ var _ = Describe("osExecGitOps boundary contracts", func() {
 		os.RemoveAll(workdir)
 	})
 
+	// seedTaggedRepo builds a source repo with one commit and an annotated tag
+	// on it, returning the source path and the commit sha the tag points at.
+	seedTaggedRepo := func(tag string) (source string, commitSHA string) {
+		var err error
+		source, err = os.MkdirTemp("", "github-releaser-lsremote-source-*")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(exec.Command("git", "-C", source, "init", "-b", "master").Run()).To(Succeed())
+		Expect(
+			os.WriteFile(filepath.Join(source, "CHANGELOG.md"), []byte("# Changelog\n"), 0o600),
+		).To(Succeed())
+		Expect(exec.Command("git", "-C", source, "add", "CHANGELOG.md").Run()).To(Succeed())
+		Expect(exec.Command("git", "-C", source,
+			"-c", "user.name=Test", "-c", "user.email=test@example.com",
+			"commit", "-m", "release "+tag,
+		).Run()).To(Succeed())
+		Expect(exec.Command("git", "-C", source,
+			"-c", "user.name=Test", "-c", "user.email=test@example.com",
+			"tag", "-a", tag, "-m", "release "+tag,
+		).Run()).To(Succeed())
+		out, err := exec.Command("git", "-C", source, "rev-parse", "HEAD").Output()
+		Expect(err).NotTo(HaveOccurred())
+		return source, strings.TrimSpace(string(out))
+	}
+
+	// Regression: `git ls-remote <url> refs/tags/<tag>` emits ONLY the tag-object
+	// line for an annotated tag — the peeled `^{}` line appears solely for a
+	// wildcard match. The agent creates annotated tags exclusively, so returning
+	// the tag-object sha made ai_review's `strings.HasPrefix(obs.SHA,
+	// result.CommitSHA)` false on every release, reporting each one `superseded`.
+	It("LsRemote returns the COMMIT sha for an annotated tag, not the tag-object sha", func() {
+		source, wantCommit := seedTaggedRepo("v1.0.0")
+		defer os.RemoveAll(source)
+
+		// Guard: if the tag object's sha equalled the commit sha, this test would
+		// pass for the wrong reason.
+		tagObjSHA, err := exec.Command("git", "-C", source, "rev-parse", "v1.0.0").Output()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strings.TrimSpace(string(tagObjSHA))).NotTo(
+			Equal(wantCommit),
+			"annotated tag object sha must differ from the commit sha, or this test proves nothing",
+		)
+
+		got, err := ops.LsRemote(ctx, source, "", "v1.0.0")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal(wantCommit))
+	})
+
+	It("LsRemote returns the commit sha for a lightweight tag", func() {
+		source, err := os.MkdirTemp("", "github-releaser-lsremote-light-*")
+		Expect(err).NotTo(HaveOccurred())
+		defer os.RemoveAll(source)
+
+		Expect(exec.Command("git", "-C", source, "init", "-b", "master").Run()).To(Succeed())
+		Expect(
+			os.WriteFile(filepath.Join(source, "CHANGELOG.md"), []byte("# Changelog\n"), 0o600),
+		).To(Succeed())
+		Expect(exec.Command("git", "-C", source, "add", "CHANGELOG.md").Run()).To(Succeed())
+		Expect(exec.Command("git", "-C", source,
+			"-c", "user.name=Test", "-c", "user.email=test@example.com",
+			"commit", "-m", "seed",
+		).Run()).To(Succeed())
+		Expect(exec.Command("git", "-C", source, "tag", "v2.0.0").Run()).To(Succeed())
+
+		want, err := exec.Command("git", "-C", source, "rev-parse", "HEAD").Output()
+		Expect(err).NotTo(HaveOccurred())
+
+		got, err := ops.LsRemote(ctx, source, "", "v2.0.0")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal(strings.TrimSpace(string(want))))
+	})
+
+	It("LsRemote returns empty for an absent tag", func() {
+		got, err := ops.LsRemote(ctx, workdir, "", "v9.9.9")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal(""))
+	})
+
 	It("Clone fetches the default-branch HEAD into an empty workdir via --depth 1", func() {
 		// Build a real source repo on the default branch (master) with a known
 		// file.  Passing a non-branch ref string proves Clone ignores it and clones
@@ -402,13 +479,18 @@ var _ = Describe("LsRemote", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			recorded := readRecordedArgs("argv")
-			// argv order: `git ls-remote <cloneURL> refs/tags/<tag>`. The recorded
+			// argv order: `git ls-remote <cloneURL> 'refs/tags/<tag>*'`. The recorded
 			// `$@` is a single space-separated line, so we split on whitespace
-			// and assert that BOTH the cloneURL and the refs/tags/<tag> appear as
+			// and assert that BOTH the cloneURL and the ref pattern appear as
 			// discrete tokens — NOT concatenated into one shell-expanded string.
 			fields := strings.Fields(recorded)
 			Expect(fields).To(ContainElement(cloneURL))
-			Expect(fields).To(ContainElement("refs/tags/v1.2.8"))
+			// The trailing `*` is load-bearing, not decoration: git emits the
+			// peeled `refs/tags/<tag>^{}` line ONLY for a wildcard match. With the
+			// exact ref, an annotated tag returns a single line carrying the TAG
+			// OBJECT sha, which is not a commit sha — and ai_review compares this
+			// return value against a commit sha.
+			Expect(fields).To(ContainElement("refs/tags/v1.2.8*"))
 			// And there are no extraneous concatenated forms.
 			Expect(recorded).NotTo(ContainSubstring(cloneURL + "refs/tags/"))
 		},
