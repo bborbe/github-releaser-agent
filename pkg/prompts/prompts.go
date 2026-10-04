@@ -58,20 +58,52 @@ func escapeInvalidJSONEscapes(s string) string {
 			b.WriteByte(c)
 			continue
 		}
-		switch s[i+1] {
-		case '"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u':
-			// Emit the escape whole and consume both bytes. Advancing by
+		if n, ok := validJSONEscapeLen(s[i:]); ok {
+			// Emit the escape whole and consume it as a unit. Advancing by
 			// one would re-examine the second backslash of a valid `\\`
 			// pair against the character *after* the pair, and rewrite it
 			// — corrupting the document this function exists to preserve.
-			b.WriteByte(c)
-			b.WriteByte(s[i+1])
-			i++
-		default:
-			b.WriteString(`\\`)
+			b.WriteString(s[i : i+n])
+			i += n - 1
+			continue
 		}
+		b.WriteString(`\\`)
 	}
 	return b.String()
+}
+
+// validJSONEscapeLen reports the byte length of the valid JSON escape
+// sequence at the start of s, which must begin with a backslash. It returns
+// false when s begins no valid escape.
+//
+// The unicode form is checked to its full width, not just its prefix: `\u`
+// followed by anything other than four hex digits is not a valid escape, and
+// passing it through would leave the document unparseable — the exact failure
+// this repair exists to remove, reached through a narrower input such as a
+// regex like `\u{1F600}` or a malformed `\uZZZZ`.
+func validJSONEscapeLen(s string) (int, bool) {
+	if len(s) < 2 || s[0] != '\\' {
+		return 0, false
+	}
+	switch s[1] {
+	case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
+		return 2, true
+	case 'u':
+		if len(s) < 6 {
+			return 0, false
+		}
+		for i := 2; i < 6; i++ {
+			c := s[i]
+			isHex := (c >= '0' && c <= '9') ||
+				(c >= 'a' && c <= 'f') ||
+				(c >= 'A' && c <= 'F')
+			if !isHex {
+				return 0, false
+			}
+		}
+		return 6, true
+	}
+	return 0, false
 }
 
 //go:embed bump_classification.md

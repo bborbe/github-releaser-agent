@@ -131,6 +131,13 @@ var _ = DescribeTable("ParseBumpVerdict",
 		"breaking change capped to minor due to pre-1.0 stream (current_version 0.69.0)",
 		"",
 	),
+	Entry(
+		"raw invalid JSON escape in reasoning is tolerated",
+		`{"bump":"patch","reasoning":"restores the (?<![\w-])personal regex guard"}`,
+		"patch",
+		`restores the (?<![\w-])personal regex guard`,
+		"",
+	),
 )
 
 var _ = Describe("ChangelogQualityGuide", func() {
@@ -258,6 +265,14 @@ var _ = DescribeTable("ParseRewriteVerdict",
 		true,
 		"- chore: deps\n",
 		"bump dump",
+		"",
+	),
+	Entry(
+		"raw invalid JSON escape in rewritten_unreleased is tolerated",
+		`{"rewrite_needed":true,"rewritten_unreleased":"- fix: match (?<![\w-])personal\n","reasoning":"kept the guard"}`,
+		true,
+		`- fix: match (?<![\w-])personal`+"\n",
+		"kept the guard",
 		"",
 	),
 )
@@ -426,5 +441,48 @@ var _ = Describe("ParseFaithfulnessResponse invalid JSON escapes", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.PerEntry).To(HaveLen(1))
 		Expect(resp.PerEntry[0].Entry).To(Equal("word boundary \b"))
+	})
+})
+
+// The scanner's own edge cases, exercised through the exported parser rather
+// than by calling escapeInvalidJSONEscapes directly: what matters is the value
+// a caller finally reads, not the intermediate string.
+var _ = DescribeTable("ParseFaithfulnessResponse scanner edge cases",
+	func(entryJSON, wantEntry string, wantErr bool) {
+		raw := `{"per_entry":[{"entry":` + entryJSON +
+			`,"verdict":"present","note":"ok"}],"extras":[],"overall":"pass"}`
+
+		resp, err := prompts.ParseFaithfulnessResponse(context.Background(), raw)
+
+		if wantErr {
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("parse faithfulness response"))
+			return
+		}
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.PerEntry).To(HaveLen(1))
+		Expect(resp.PerEntry[0].Entry).To(Equal(wantEntry))
+	},
+	Entry("consecutive backslashes decode to one", `"a\\b"`, `a\b`, false),
+	Entry("an invalid escape decodes to its literal backslash", `"a\wb"`, `a\wb`, false),
+	Entry("a malformed unicode escape is repaired", `"a\uZZZZb"`, `a\uZZZZb`, false),
+	Entry("a short unicode escape is repaired", `"a\u12b"`, `a\u12b`, false),
+	Entry("a brace-form unicode escape is repaired", `"a\u{1F600}b"`, `a\u{1F600}b`, false),
+	Entry("a valid unicode escape decodes", `"a`+"\\"+`u00e9b"`, "aéb", false),
+)
+
+var _ = Describe("ParseFaithfulnessResponse trailing backslash", func() {
+	// The one input the repair cannot fix: a backslash with nothing after it is
+	// left alone, so the document stays malformed and the caller's
+	// malformed-input handling still applies. This pins the guard as a
+	// deliberate fall-through rather than an accidental silent success.
+	It("leaves a document ending in a bare backslash malformed", func() {
+		raw := `{"per_entry":[{"entry":"a` + string(rune(0x5c))
+
+		resp, err := prompts.ParseFaithfulnessResponse(context.Background(), raw)
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("parse faithfulness response"))
+		Expect(resp).To(Equal(prompts.FaithfulnessLLMResponse{}))
 	})
 })
