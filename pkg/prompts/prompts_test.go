@@ -367,4 +367,64 @@ var _ = DescribeTable(
 		0,
 		"",
 	),
+	Entry(
+		"raw invalid JSON escape in echoed entry parses (backslash-w and backslash-d)",
+		`{"per_entry":[{"entry":"- fix: match with (?<![\w-])personal and \d+ digits","verdict":"present","note":"ok"}],"extras":[],"overall":"pass"}`,
+		"pass",
+		1,
+		0,
+		"",
+	),
 )
+
+var _ = Describe("ParseFaithfulnessResponse invalid JSON escapes", func() {
+	// A model asked to echo a changelog bullet verbatim may emit a regex such
+	// as (?<![\w-]) without JSON-escaping the backslash. encoding/json rejects
+	// that outright, which discarded a passing Faithfulness verdict on
+	// bborbe/claude-supervisor 2026-10-04 and parked the release at
+	// human_review. These two specs are the regression pair: the first fails
+	// against the unfixed parser, the second fails against a blanket escaper
+	// that doubles every backslash instead of only the invalid ones.
+	It("parses an entry carrying invalid escapes and decodes it back verbatim", func() {
+		raw := `{"per_entry":[{"entry":"- fix: (?<![\w-])personal and \d+ digits","verdict":"present","note":"ok"}],"extras":[],"overall":"pass"}`
+
+		resp, err := prompts.ParseFaithfulnessResponse(context.Background(), raw)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.Overall).To(Equal("pass"))
+		Expect(resp.PerEntry).To(HaveLen(1))
+		Expect(resp.PerEntry[0].Verdict).To(Equal("present"))
+		Expect(resp.PerEntry[0].Entry).
+			To(Equal(`- fix: (?<![\w-])personal and \d+ digits`))
+	})
+
+	It("leaves every valid JSON escape decoding unchanged", func() {
+		raw := `{"per_entry":[{"entry":"quote \" newline \n tab \t backslash \\ slash \/ unicode ` + "\\" + `u00e9","verdict":"present","note":"ok"}],"extras":[],"overall":"pass"}`
+
+		resp, err := prompts.ParseFaithfulnessResponse(context.Background(), raw)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.PerEntry).To(HaveLen(1))
+		Expect(resp.PerEntry[0].Entry).To(Equal(
+			"quote \" newline \n tab \t backslash \\ slash / unicode é",
+		))
+	})
+
+	// Pins the boundary of the repair, not a defect in it. Backslash-b IS a
+	// valid JSON escape (backspace), so it is deliberately NOT doubled: the
+	// parser cannot tell a regex word-boundary the model wrote from a
+	// backspace the model meant, and doubling every one would corrupt the
+	// latter. The consequence is recorded on the task that introduced this
+	// repair — a `\b` in an echoed entry decodes to a control character and
+	// the recorded entry text is subtly wrong, without failing the parse.
+	// This spec exists so a future "fix" cannot silently start doubling it.
+	It("does not repair backslash-b, which is a valid JSON escape (backspace)", func() {
+		raw := `{"per_entry":[{"entry":"word boundary \b","verdict":"present","note":"ok"}],"extras":[],"overall":"pass"}`
+
+		resp, err := prompts.ParseFaithfulnessResponse(context.Background(), raw)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.PerEntry).To(HaveLen(1))
+		Expect(resp.PerEntry[0].Entry).To(Equal("word boundary \b"))
+	})
+})
