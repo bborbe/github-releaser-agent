@@ -23,6 +23,100 @@ import (
 	"github.com/bborbe/errors"
 )
 
+// unmarshalLenient unmarshals s into v after doubling every backslash that
+// does not begin a valid JSON escape sequence.
+//
+// All three verdict parsers below hand json.Unmarshal a string a model
+// produced, and the model is asked to echo changelog lines verbatim. A
+// changelog bullet may legitimately contain a regex such as (?<![\w-]) or
+// \d+, and a model that echoes it without JSON-escaping the backslash
+// produces a document encoding/json rejects outright with "invalid escape
+// sequence". Observed live 2026-10-04 on bborbe/claude-supervisor: the
+// Faithfulness check discarded a passing verdict and recorded the run as a
+// failed check because of exactly this, parking the release at human_review.
+//
+// Only sequences that cannot be a valid JSON escape are touched. The valid
+// escapes — " \ / b f n r t and the \uXXXX form — pass through untouched, so
+// a document that was already correct decodes to exactly the value it did
+// before. That distinction is load-bearing: doubling every backslash would
+// silently corrupt \" and \n, turning a correct response into a wrong one.
+//
+// A trailing backslash with nothing after it is left alone; the document
+// stays malformed and the caller's malformed-input handling still applies.
+func unmarshalLenient(s string, v any) error {
+	return json.Unmarshal([]byte(escapeInvalidJSONEscapes(s)), v)
+}
+
+// escapeInvalidJSONEscapes returns s with every backslash that does not
+// begin a valid JSON escape sequence doubled. See unmarshalLenient.
+//
+// It rewrites the whole document rather than tracking JSON string spans, and
+// that is safe by a short argument worth stating rather than re-deriving: a
+// backslash is legal only inside a string literal, and there only as the head
+// of a valid escape sequence. So in any document encoding/json already
+// accepts, every backslash satisfies validJSONEscapeLen, is emitted verbatim,
+// and consumes its own continuation bytes via the `i += n - 1` below. The
+// function is therefore the identity on every valid JSON document — which is
+// what makes the "already correct decodes to exactly the value it did before"
+// guarantee above hold, and means it cannot corrupt a document that would
+// otherwise have parsed.
+func escapeInvalidJSONEscapes(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c != '\\' || i+1 >= len(s) {
+			b.WriteByte(c)
+			continue
+		}
+		if n, ok := validJSONEscapeLen(s[i:]); ok {
+			// Emit the escape whole and consume it as a unit. Advancing by
+			// one would re-examine the second backslash of a valid `\\`
+			// pair against the character *after* the pair, and rewrite it
+			// — corrupting the document this function exists to preserve.
+			b.WriteString(s[i : i+n])
+			i += n - 1
+			continue
+		}
+		b.WriteString(`\\`)
+	}
+	return b.String()
+}
+
+// validJSONEscapeLen reports the byte length of the valid JSON escape
+// sequence at the start of s, which must begin with a backslash. It returns
+// false when s begins no valid escape.
+//
+// The unicode form is checked to its full width, not just its prefix: `\u`
+// followed by anything other than four hex digits is not a valid escape, and
+// passing it through would leave the document unparseable — the exact failure
+// this repair exists to remove, reached through a narrower input such as a
+// regex like `\u{1F600}` or a malformed `\uZZZZ`.
+func validJSONEscapeLen(s string) (int, bool) {
+	if len(s) < 2 || s[0] != '\\' {
+		return 0, false
+	}
+	switch s[1] {
+	case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
+		return 2, true
+	case 'u':
+		if len(s) < 6 {
+			return 0, false
+		}
+		for i := 2; i < 6; i++ {
+			c := s[i]
+			isHex := (c >= '0' && c <= '9') ||
+				(c >= 'a' && c <= 'f') ||
+				(c >= 'A' && c <= 'F')
+			if !isHex {
+				return 0, false
+			}
+		}
+		return 6, true
+	}
+	return 0, false
+}
+
 //go:embed bump_classification.md
 var bumpClassificationPrompt string
 
@@ -82,7 +176,7 @@ func ParseBumpVerdict(ctx context.Context, claudeOutput string) (BumpVerdict, er
 	var v BumpVerdict
 
 	// Strategy 1: Parse the trimmed input as a JSON object directly.
-	if err := json.Unmarshal([]byte(trimmed), &v); err == nil {
+	if err := unmarshalLenient(trimmed, &v); err == nil {
 		return validateVerdict(ctx, v)
 	}
 
@@ -93,7 +187,7 @@ func ParseBumpVerdict(ctx context.Context, claudeOutput string) (BumpVerdict, er
 		strings.TrimPrefix(strings.TrimPrefix(trimmed, "```json"), "```"),
 		"```",
 	))
-	if err := json.Unmarshal([]byte(stripped), &v); err == nil {
+	if err := unmarshalLenient(stripped, &v); err == nil {
 		return validateVerdict(ctx, v)
 	}
 
@@ -102,7 +196,7 @@ func ParseBumpVerdict(ctx context.Context, claudeOutput string) (BumpVerdict, er
 	if !ok {
 		return BumpVerdict{}, errors.Errorf(ctx, "parse bump verdict: no JSON found")
 	}
-	if err := json.Unmarshal([]byte(block), &v); err != nil {
+	if err := unmarshalLenient(block, &v); err != nil {
 		return BumpVerdict{}, errors.Wrapf(ctx, err, "parse bump verdict: %s", block)
 	}
 	return validateVerdict(ctx, v)
@@ -162,7 +256,7 @@ func ParseRewriteVerdict(
 	var v RewriteVerdict
 
 	// Strategy 1: Parse the trimmed input as a JSON object directly.
-	if err := json.Unmarshal([]byte(trimmed), &v); err == nil {
+	if err := unmarshalLenient(trimmed, &v); err == nil {
 		return validateRewriteVerdict(ctx, v)
 	}
 
@@ -171,7 +265,7 @@ func ParseRewriteVerdict(
 		strings.TrimPrefix(strings.TrimPrefix(trimmed, "```json"), "```"),
 		"```",
 	))
-	if err := json.Unmarshal([]byte(stripped), &v); err == nil {
+	if err := unmarshalLenient(stripped, &v); err == nil {
 		return validateRewriteVerdict(ctx, v)
 	}
 
@@ -180,7 +274,7 @@ func ParseRewriteVerdict(
 	if !ok {
 		return RewriteVerdict{}, errors.Errorf(ctx, "parse rewrite verdict: no JSON found")
 	}
-	if err := json.Unmarshal([]byte(block), &v); err != nil {
+	if err := unmarshalLenient(block, &v); err != nil {
 		return RewriteVerdict{}, errors.Wrapf(ctx, err, "parse rewrite verdict: %s", block)
 	}
 	return validateRewriteVerdict(ctx, v)
@@ -276,7 +370,7 @@ func ParseFaithfulnessResponse(
 	var v FaithfulnessLLMResponse
 
 	// Strategy 1: Parse the trimmed input as a JSON object directly.
-	if err := json.Unmarshal([]byte(trimmed), &v); err == nil {
+	if err := unmarshalLenient(trimmed, &v); err == nil {
 		return validateFaithfulness(ctx, v)
 	}
 
@@ -285,7 +379,7 @@ func ParseFaithfulnessResponse(
 		strings.TrimPrefix(strings.TrimPrefix(trimmed, "```json"), "```"),
 		"```",
 	))
-	if err := json.Unmarshal([]byte(stripped), &v); err == nil {
+	if err := unmarshalLenient(stripped, &v); err == nil {
 		return validateFaithfulness(ctx, v)
 	}
 
@@ -297,7 +391,7 @@ func ParseFaithfulnessResponse(
 			"parse faithfulness response: no JSON found",
 		)
 	}
-	if err := json.Unmarshal([]byte(block), &v); err != nil {
+	if err := unmarshalLenient(block, &v); err != nil {
 		return FaithfulnessLLMResponse{}, errors.Wrapf(
 			ctx,
 			err,
