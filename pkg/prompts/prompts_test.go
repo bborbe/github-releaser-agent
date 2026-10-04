@@ -448,27 +448,22 @@ var _ = Describe("ParseFaithfulnessResponse invalid JSON escapes", func() {
 // than by calling escapeInvalidJSONEscapes directly: what matters is the value
 // a caller finally reads, not the intermediate string.
 var _ = DescribeTable("ParseFaithfulnessResponse scanner edge cases",
-	func(entryJSON, wantEntry string, wantErr bool) {
+	func(entryJSON, wantEntry string) {
 		raw := `{"per_entry":[{"entry":` + entryJSON +
 			`,"verdict":"present","note":"ok"}],"extras":[],"overall":"pass"}`
 
 		resp, err := prompts.ParseFaithfulnessResponse(context.Background(), raw)
 
-		if wantErr {
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("parse faithfulness response"))
-			return
-		}
 		Expect(err).NotTo(HaveOccurred())
 		Expect(resp.PerEntry).To(HaveLen(1))
 		Expect(resp.PerEntry[0].Entry).To(Equal(wantEntry))
 	},
-	Entry("consecutive backslashes decode to one", `"a\\b"`, `a\b`, false),
-	Entry("an invalid escape decodes to its literal backslash", `"a\wb"`, `a\wb`, false),
-	Entry("a malformed unicode escape is repaired", `"a\uZZZZb"`, `a\uZZZZb`, false),
-	Entry("a short unicode escape is repaired", `"a\u12b"`, `a\u12b`, false),
-	Entry("a brace-form unicode escape is repaired", `"a\u{1F600}b"`, `a\u{1F600}b`, false),
-	Entry("a valid unicode escape decodes", `"a`+"\\"+`u00e9b"`, "aéb", false),
+	Entry("consecutive backslashes decode to one", `"a\\b"`, `a\b`),
+	Entry("an invalid escape decodes to its literal backslash", `"a\wb"`, `a\wb`),
+	Entry("a malformed unicode escape is repaired", `"a\uZZZZb"`, `a\uZZZZb`),
+	Entry("a short unicode escape is repaired", `"a\u12b"`, `a\u12b`),
+	Entry("a brace-form unicode escape is repaired", `"a\u{1F600}b"`, `a\u{1F600}b`),
+	Entry("a valid unicode escape decodes", `"a`+"\\"+`u00e9b"`, "aéb"),
 )
 
 var _ = Describe("ParseFaithfulnessResponse trailing backslash", func() {

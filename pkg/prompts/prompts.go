@@ -49,6 +49,17 @@ func unmarshalLenient(s string, v any) error {
 
 // escapeInvalidJSONEscapes returns s with every backslash that does not
 // begin a valid JSON escape sequence doubled. See unmarshalLenient.
+//
+// It rewrites the whole document rather than tracking JSON string spans, and
+// that is safe by a short argument worth stating rather than re-deriving: a
+// backslash is legal only inside a string literal, and there only as the head
+// of a valid escape sequence. So in any document encoding/json already
+// accepts, every backslash satisfies validJSONEscapeLen, is emitted verbatim,
+// and consumes its own continuation bytes via the `i += n - 1` below. The
+// function is therefore the identity on every valid JSON document — which is
+// what makes the "already correct decodes to exactly the value it did before"
+// guarantee above hold, and means it cannot corrupt a document that would
+// otherwise have parsed.
 func escapeInvalidJSONEscapes(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
