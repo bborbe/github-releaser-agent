@@ -19,17 +19,17 @@ The headline reason to use prompts/specs: **safe unattended execution** inside a
 
 1. Create spec → `/dark-factory:create-spec`
 2. Audit spec → `/dark-factory:audit-spec`
-3. User confirms → `dark-factory spec approve <name>`
+3. Approve the spec → `dark-factory spec approve <name>`
 4. dark-factory auto-generates prompts from spec (`autoGeneratePrompts: true`)
 5. Audit prompts → `/dark-factory:audit-prompt`
-6. User confirms → `dark-factory prompt approve <name>`
+6. Approve the prompt → `dark-factory prompt approve <name>`
 7. Start daemon → `dark-factory daemon` (use Bash `run_in_background: true`)
 
 **Standalone prompts (simple changes):**
 
 1. Create prompt → `/dark-factory:create-prompt`
 2. Audit prompt → `/dark-factory:audit-prompt`
-3. User confirms → `dark-factory prompt approve <name>`
+3. Approve the prompt → `dark-factory prompt approve <name>`
 4. Start daemon → `dark-factory daemon` (use Bash `run_in_background: true`)
 
 ### Claude Code Commands
@@ -61,7 +61,7 @@ The headline reason to use prompts/specs: **safe unattended execution** inside a
 - Never manually edit frontmatter status — use the CLI commands above
 - Always audit before approving; always `/dark-factory:verify-spec <id>` before completing
 - **Spec-linked prompts are daemon-generated** — after `spec approve`, wait for the `dark-factory-gen-<spec>` container; never hand-write prompts for an approved spec
-- **BLOCKING: never run `prompt approve`, `spec approve`, or `daemon` without explicit user confirmation.** Write the prompt/spec, then STOP and ask.
+- Run `dark-factory prompt approve` / `dark-factory spec approve` yourself once the prompt/spec passed its auditor (global rule execution-phase-no-reask)
 - **Before starting the daemon** — run `dark-factory status` first; the daemon does not exit when the queue drains, so kill it once `Queue: 0`
 
 ## Development Standards
