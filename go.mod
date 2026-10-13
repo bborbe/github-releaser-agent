@@ -11,7 +11,7 @@ require (
 	github.com/bborbe/cqrs v0.6.12
 	github.com/bborbe/errors v1.6.3
 	github.com/bborbe/kafka v1.27.1
-	github.com/bborbe/maintainer v0.50.9
+	github.com/bborbe/maintainer v0.50.10
 	github.com/bborbe/sentry v1.10.4
 	github.com/bborbe/service v1.10.16
 	github.com/bborbe/time v1.27.16
@@ -28,7 +28,7 @@ require (
 	github.com/bborbe/argument/v2 v2.13.6 // indirect
 	github.com/bborbe/collection v1.21.2 // indirect
 	github.com/bborbe/http v1.26.29 // indirect
-	github.com/bborbe/k8s v1.14.21 // indirect
+	github.com/bborbe/k8s v1.14.22 // indirect
 	github.com/bborbe/kv v1.21.18 // indirect
 	github.com/bborbe/log v1.7.4 // indirect
 	github.com/bborbe/math v1.4.14 // indirect
