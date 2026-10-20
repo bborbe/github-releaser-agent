@@ -7,15 +7,15 @@ replace (
 )
 
 require (
-	github.com/bborbe/agent v0.100.0
+	github.com/bborbe/agent v0.103.1
 	github.com/bborbe/cqrs v0.6.12
 	github.com/bborbe/errors v1.6.3
-	github.com/bborbe/kafka v1.27.1
-	github.com/bborbe/maintainer v0.50.10
+	github.com/bborbe/kafka v1.28.3
+	github.com/bborbe/maintainer v0.50.12
 	github.com/bborbe/sentry v1.10.4
-	github.com/bborbe/service v1.10.16
-	github.com/bborbe/time v1.27.16
-	github.com/bborbe/vault-cli v0.168.4
+	github.com/bborbe/service v1.11.0
+	github.com/bborbe/time v1.27.17
+	github.com/bborbe/vault-cli v0.174.0
 	github.com/golang/glog v1.2.5
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.44.0
@@ -27,16 +27,16 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/bborbe/argument/v2 v2.13.6 // indirect
 	github.com/bborbe/collection v1.21.2 // indirect
-	github.com/bborbe/http v1.26.29 // indirect
-	github.com/bborbe/k8s v1.14.22 // indirect
+	github.com/bborbe/http v1.26.30 // indirect
+	github.com/bborbe/k8s v1.14.23 // indirect
 	github.com/bborbe/kv v1.21.18 // indirect
 	github.com/bborbe/log v1.7.4 // indirect
-	github.com/bborbe/math v1.4.14 // indirect
+	github.com/bborbe/math v1.4.15 // indirect
 	github.com/bborbe/metrics v0.6.7 // indirect
 	github.com/bborbe/parse v1.12.3 // indirect
 	github.com/bborbe/run v1.11.2 // indirect
 	github.com/bborbe/strimzi v1.8.20 // indirect
-	github.com/bborbe/validation v1.5.4 // indirect
+	github.com/bborbe/validation v1.5.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bradleyfalzon/ghinstallation/v2 v2.19.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -58,7 +58,7 @@ require (
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-github/v88 v88.0.0 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
-	github.com/google/pprof v0.0.0-20261012231050-2af12c3f4d87 // indirect
+	github.com/google/pprof v0.0.0-20261016150608-1facf8f91b50 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/hashicorp/go-uuid v1.0.4 // indirect
@@ -100,7 +100,7 @@ require (
 	k8s.io/apimachinery v0.38.0-alpha.2 // indirect
 	k8s.io/client-go v0.38.0-alpha.2 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
-	k8s.io/kube-openapi v0.0.0-20261007072838-e2e80c32a35f // indirect
+	k8s.io/kube-openapi v0.0.0-20261014044854-ca3452a79603 // indirect
 	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3 // indirect
 	sigs.k8s.io/json v0.0.0-20260909141634-11ed52e25bc5 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
