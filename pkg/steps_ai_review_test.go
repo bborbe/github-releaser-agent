@@ -47,21 +47,19 @@ func splitNonEmptyLines(s string) []string {
 var _ = Describe("AIReviewStep", func() {
 
 	var (
-		fakeClient   *mocks.ReviewClient
-		fakePRClient *mocks.PullRequestClient
-		fakeRunner   *mocks.ClaudeRunnerMock
-		fakeOps      *mocks.GitOps
-		token        string
-		step         agentlib.Step
+		fakeClient *mocks.ReviewClient
+		fakeRunner *mocks.ClaudeRunnerMock
+		fakeOps    *mocks.GitOps
+		token      string
+		step       agentlib.Step
 	)
 
 	BeforeEach(func() {
 		fakeClient = &mocks.ReviewClient{}
-		fakePRClient = &mocks.PullRequestClient{}
 		fakeRunner = &mocks.ClaudeRunnerMock{}
 		fakeOps = &mocks.GitOps{}
 		token = "test-token"
-		step = pkg.NewAIReviewStep(fakeClient, fakePRClient, fakeRunner, fakeOps, token)
+		step = pkg.NewAIReviewStep(fakeClient, fakeRunner, fakeOps, token)
 	})
 
 	// taskWithResult builds a task markdown with ## Result section.
@@ -1270,7 +1268,9 @@ var _ = Describe("AIReviewStep", func() {
 				func() {
 					DeferCleanup(func() { _ = os.RemoveAll(tmpDir) })
 					fakeOps.PushReturns(
-						errors.New("fatal: unable to access remote: connection reset by peer"),
+						errors.New(
+							"remote: error: GH006: Protected branch update failed for refs/heads/master",
+						),
 					)
 					fakeOps.LsRemoteReturns("", nil)
 
@@ -1285,9 +1285,9 @@ var _ = Describe("AIReviewStep", func() {
 
 					downgraded := extractResult(md)
 					Expect(downgraded.Outcome).To(Equal(pkg.ResultOutcomeFailed))
-					Expect(downgraded.Error).To(ContainSubstring("connection reset"))
+					Expect(downgraded.Error).To(ContainSubstring("GH006"))
 					Expect(downgraded.ErrorCategory).
-						To(Equal(git.ErrorCategoryUnknown))
+						To(Equal(git.ErrorCategoryProtectedBranchRejected))
 
 					review := extractReview(md)
 					Expect(review.Notes).To(ContainSubstring("push failed"))
@@ -1311,7 +1311,9 @@ var _ = Describe("AIReviewStep", func() {
 				func() {
 					DeferCleanup(func() { _ = os.RemoveAll(tmpDir) })
 					fakeOps.PushReturns(
-						errors.New("fatal: unable to access remote: connection reset by peer"),
+						errors.New(
+							"remote: error: GH006: Protected branch update failed for refs/heads/master",
+						),
 					)
 					fakeOps.LsRemoteReturns(
 						"abc1234e3cca37862f4e612a7b14c4e00af6b935",
@@ -1333,7 +1335,7 @@ var _ = Describe("AIReviewStep", func() {
 
 					review := extractReview(md)
 					Expect(review.Notes).To(ContainSubstring("push failed"))
-					Expect(review.Notes).To(ContainSubstring("connection reset"))
+					Expect(review.Notes).To(ContainSubstring("GH006"))
 					Expect(extractReviewWarning(md)).To(BeNil())
 				},
 			)
@@ -1426,170 +1428,6 @@ var _ = Describe("AIReviewStep", func() {
 					Expect(body).NotTo(ContainSubstring(`"outcome": "released"`))
 					Expect(body).NotTo(ContainSubstring(`"outcome":"released"`))
 				},
-			)
-		})
-
-		// Spec 004 — a branch-protection rejection publishes the release
-		// commit to release/<tag>, opens (or reuses) one pull request, pushes
-		// the tag, and parks the task at human_review with the PR URL.
-		Context("branch-protection PR fallback (spec 004)", func() {
-			const gh013 = "remote: error: GH013: Repository rule violations found for refs/heads/master"
-
-			It("ProtectedRejection → PR path, branch + tag pushed, result pr-merge", func() {
-				fakeOps.PushReturnsOnCall(0, errors.New(gh013))
-				fakeOps.PushReturnsOnCall(1, nil)
-				fakeOps.PushReturnsOnCall(2, nil)
-				fakePRClient.DefaultBranchReturns("master", nil)
-				fakePRClient.FindOpenPullRequestReturns("", false, nil)
-				fakePRClient.CreatePullRequestReturns(
-					"https://github.com/bborbe/example/pull/7", nil,
-				)
-
-				result, md := runStep(
-					taskWithResultFull("abc1234", "v1.0.0", "released", tmpDir),
-				)
-
-				Expect(fakeOps.PushCallCount()).To(Equal(3))
-				_, _, refs0 := fakeOps.PushArgsForCall(0)
-				Expect(refs0).To(Equal([]string{"HEAD", "refs/tags/v1.0.0"}))
-				_, _, refs1 := fakeOps.PushArgsForCall(1)
-				Expect(refs1).To(Equal([]string{"HEAD:refs/heads/release/v1.0.0"}))
-				_, _, refs2 := fakeOps.PushArgsForCall(2)
-				Expect(refs2).To(Equal([]string{"refs/tags/v1.0.0"}))
-
-				Expect(fakePRClient.FindOpenPullRequestCallCount()).To(Equal(1))
-				Expect(fakePRClient.CreatePullRequestCallCount()).To(Equal(1))
-				_, owner, repo, title, head, base, body :=
-					fakePRClient.CreatePullRequestArgsForCall(0)
-				Expect(owner).To(Equal("bborbe"))
-				Expect(repo).To(Equal("example"))
-				Expect(title).To(Equal("release v1.0.0"))
-				Expect(head).To(Equal("release/v1.0.0"))
-				Expect(base).To(Equal("master"))
-				Expect(body).To(ContainSubstring("- feat: add foo"))
-
-				Expect(fakeOps.LsRemoteCallCount()).To(Equal(0))
-
-				Expect(result.Status).To(Equal(agentlib.AgentStatusFailed))
-				Expect(result.NextPhase).To(Equal("human_review"))
-
-				prResult := extractResult(md)
-				Expect(prResult.Outcome).To(Equal(pkg.ResultOutcomeFailed))
-				Expect(prResult.Path).To(Equal(pkg.ResultPathPRMerge))
-				Expect(prResult.ErrorCategory).
-					To(Equal(git.ErrorCategoryProtectedBranchRejected))
-				Expect(prResult.PullRequestURL).
-					To(Equal("https://github.com/bborbe/example/pull/7"))
-				Expect(prResult.Error).To(ContainSubstring("GH013"))
-
-				Expect(extractReview(md).FailedChecks).To(ContainElement(pkg.CheckPush))
-				Expect(extractReviewWarning(md)).To(BeNil())
-			})
-
-			It("ExistingPRIsReused — no create call, tag still pushed", func() {
-				fakeOps.PushReturnsOnCall(0, errors.New(gh013))
-				fakePRClient.DefaultBranchReturns("master", nil)
-				fakePRClient.FindOpenPullRequestReturns(
-					"https://github.com/bborbe/example/pull/9", true, nil,
-				)
-
-				result, md := runStep(
-					taskWithResultFull("abc1234", "v1.0.0", "released", tmpDir),
-				)
-
-				Expect(fakePRClient.CreatePullRequestCallCount()).To(Equal(0))
-				Expect(extractResult(md).PullRequestURL).
-					To(Equal("https://github.com/bborbe/example/pull/9"))
-				Expect(fakeOps.PushCallCount()).To(Equal(3))
-				Expect(result.NextPhase).To(Equal("human_review"))
-			})
-
-			It("PRCreateFails — today's failure shape, no tag push", func() {
-				fakeOps.PushReturnsOnCall(0, errors.New(gh013))
-				fakePRClient.DefaultBranchReturns("master", nil)
-				fakePRClient.FindOpenPullRequestReturns("", false, nil)
-				fakePRClient.CreatePullRequestReturns(
-					"", errors.New("422 Validation Failed"),
-				)
-
-				result, md := runStep(
-					taskWithResultFull("abc1234", "v1.0.0", "released", tmpDir),
-				)
-
-				Expect(fakeOps.PushCallCount()).To(Equal(2))
-				failed := extractResult(md)
-				Expect(failed.Path).To(Equal(pkg.ResultPathDirectPush))
-				Expect(failed.PullRequestURL).To(BeEmpty())
-				Expect(failed.Error).To(ContainSubstring("422"))
-				Expect(result.NextPhase).To(Equal("human_review"))
-			})
-
-			It("TagPushFailsAfterPRCreate — pr-merge kept, error names the tag failure", func() {
-				fakeOps.PushReturnsOnCall(0, errors.New(gh013))
-				fakeOps.PushReturnsOnCall(2, errors.New("remote: error: tag rejected"))
-				fakePRClient.DefaultBranchReturns("master", nil)
-				fakePRClient.FindOpenPullRequestReturns("", false, nil)
-				fakePRClient.CreatePullRequestReturns(
-					"https://github.com/bborbe/example/pull/7", nil,
-				)
-
-				result, md := runStep(
-					taskWithResultFull("abc1234", "v1.0.0", "released", tmpDir),
-				)
-
-				Expect(fakeOps.PushCallCount()).To(Equal(3))
-				prResult := extractResult(md)
-				Expect(prResult.Path).To(Equal(pkg.ResultPathPRMerge))
-				Expect(prResult.PullRequestURL).
-					To(Equal("https://github.com/bborbe/example/pull/7"))
-				Expect(prResult.Error).To(ContainSubstring("tag push failed"))
-				Expect(result.NextPhase).To(Equal("human_review"))
-			})
-
-			It("DefaultBranchLookupFails — failure shape, no PR created", func() {
-				fakeOps.PushReturnsOnCall(0, errors.New(gh013))
-				fakePRClient.DefaultBranchReturns("", errors.New("403 Forbidden"))
-
-				result, md := runStep(
-					taskWithResultFull("abc1234", "v1.0.0", "released", tmpDir),
-				)
-
-				Expect(fakeOps.PushCallCount()).To(Equal(2))
-				Expect(fakePRClient.CreatePullRequestCallCount()).To(Equal(0))
-				failed := extractResult(md)
-				Expect(failed.Path).To(Equal(pkg.ResultPathDirectPush))
-				Expect(failed.Error).To(ContainSubstring("default branch"))
-				Expect(result.NextPhase).To(Equal("human_review"))
-			})
-
-			DescribeTable(
-				"Non-protection push errors open no PR",
-				func(pushErr error, expectedCategory git.ErrorCategory) {
-					fakeOps.PushReturns(pushErr)
-
-					result, md := runStep(
-						taskWithResultFull("abc1234", "v1.0.0", "released", tmpDir),
-					)
-
-					Expect(fakeOps.PushCallCount()).To(Equal(1))
-					Expect(fakePRClient.FindOpenPullRequestCallCount()).To(Equal(0))
-					Expect(fakePRClient.CreatePullRequestCallCount()).To(Equal(0))
-					failed := extractResult(md)
-					Expect(failed.Path).To(Equal(pkg.ResultPathDirectPush))
-					Expect(failed.PullRequestURL).To(BeEmpty())
-					Expect(failed.ErrorCategory).To(Equal(expectedCategory))
-					Expect(result.NextPhase).To(Equal("human_review"))
-				},
-				Entry(
-					"non-fast-forward",
-					errors.New("! [rejected] master -> master (non-fast-forward)"),
-					git.ErrorCategoryPushNonFastForward,
-				),
-				Entry(
-					"unknown",
-					errors.New("fatal: cosmic ray flipped a bit"),
-					git.ErrorCategoryUnknown,
-				),
 			)
 		})
 	})

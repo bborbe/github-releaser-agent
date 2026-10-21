@@ -18,7 +18,6 @@ import (
 	releaserpkg "github.com/bborbe/github-releaser-agent/pkg"
 	"github.com/bborbe/github-releaser-agent/pkg/git"
 	"github.com/bborbe/github-releaser-agent/pkg/githubchangelog"
-	"github.com/bborbe/github-releaser-agent/pkg/githubpullrequest"
 	"github.com/bborbe/github-releaser-agent/pkg/githubreview"
 	"github.com/bborbe/github-releaser-agent/pkg/githubtags"
 	"github.com/bborbe/github-releaser-agent/pkg/maintainerconfig"
@@ -136,10 +135,8 @@ func CreateAgent(
 	)
 	// Reuse the same GitOps seam as the execution step so the push of
 	// the local commit + tag goes out via the same authenticated path.
-	prClient := githubpullrequest.NewHTTPClient(ghToken)
 	reviewStep := releaserpkg.NewAIReviewStep(
 		reviewClient,
-		prClient,
 		aiReviewRunner,
 		executionOps,
 		ghToken,

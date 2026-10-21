@@ -17,7 +17,6 @@ import (
 	"github.com/bborbe/errors"
 	"github.com/bborbe/github-releaser-agent/pkg/changelog"
 	"github.com/bborbe/github-releaser-agent/pkg/git"
-	"github.com/bborbe/github-releaser-agent/pkg/githubpullrequest"
 	"github.com/bborbe/github-releaser-agent/pkg/githubreview"
 	"github.com/bborbe/github-releaser-agent/pkg/plugin"
 	"github.com/bborbe/github-releaser-agent/pkg/prompts"
@@ -124,24 +123,16 @@ type ReviewOutput struct {
 }
 
 // NewAIReviewStep wires the ai_review step with its GitHub REST API
-// client, the pull-request client used by the protected-branch fallback,
-// the ClaudeRunner used to invoke the faithfulness LLM, the GitOps seam
-// used to push the local commit + tag, and the GitHub token (used for
-// authenticated API calls).
+// client, the ClaudeRunner used to invoke the faithfulness LLM, the
+// GitOps seam used to push the local commit + tag, and the GitHub
+// token (used for authenticated API calls).
 func NewAIReviewStep(
 	client githubreview.Client,
-	prClient githubpullrequest.Client,
 	runner claudelib.ClaudeRunner,
 	ops git.GitOps,
 	ghToken string,
 ) agentlib.Step {
-	return &aiReviewStep{
-		client:   client,
-		prClient: prClient,
-		runner:   runner,
-		ops:      ops,
-		ghToken:  ghToken,
-	}
+	return &aiReviewStep{client: client, runner: runner, ops: ops, ghToken: ghToken}
 }
 
 // aiReviewStep implements agentlib.Step. It performs three remote
@@ -150,11 +141,10 @@ func NewAIReviewStep(
 // Claude runner, and on success pushes the local commit + tag to the
 // remote.
 type aiReviewStep struct {
-	client   githubreview.Client
-	prClient githubpullrequest.Client
-	runner   claudelib.ClaudeRunner
-	ops      git.GitOps
-	ghToken  string
+	client  githubreview.Client
+	runner  claudelib.ClaudeRunner
+	ops     git.GitOps
+	ghToken string
 }
 
 // Name implements agentlib.Step.
@@ -275,7 +265,7 @@ func (s *aiReviewStep) Run(ctx context.Context, md *agentlib.Markdown) (*agentli
 	if !output.Approved {
 		return s.finishNotApproved(ctx, md, result, output, &workdirShouldCleanup)
 	}
-	return s.finishApproved(ctx, md, result, plan, output, &workdirShouldCleanup)
+	return s.finishApproved(ctx, md, result, output, &workdirShouldCleanup)
 }
 
 // finishNotApproved is the `!approved` terminal branch. It consults the
@@ -376,7 +366,6 @@ func (s *aiReviewStep) finishApproved(
 	ctx context.Context,
 	md *agentlib.Markdown,
 	result *ResultOutput,
-	plan *PlanOutput,
 	output ReviewOutput,
 	workdirShouldCleanup *bool,
 ) (*agentlib.Result, error) {
@@ -387,22 +376,6 @@ func (s *aiReviewStep) finishApproved(
 		"refs/tags/"+result.LocalTag,
 	)
 	if pushErr != nil {
-		if git.ClassifyError(pushErr) == git.ErrorCategoryProtectedBranchRejected {
-			// Branch protection rejected the direct push: publish the release
-			// commit through a pull request instead. This path returns without
-			// consulting the remote — a tag on the remote must never upgrade
-			// the result to `released`, because the default branch does not
-			// carry the commit.
-			return s.finishProtectedBranch(
-				ctx,
-				md,
-				result,
-				plan,
-				output,
-				pushErr,
-				workdirShouldCleanup,
-			)
-		}
 		glog.Warningf("ai_review: push failed: %v", pushErr)
 		output.Notes = "push failed: " + pushErr.Error()
 		output.Approved = false
@@ -591,185 +564,14 @@ func (s *aiReviewStep) writeFailureResult(
 		ErrorCategory: category,
 		Error:         message,
 	}
-	if err := s.writeResult(ctx, md, output); err != nil {
+	section, err := agentlib.MarshalSectionTyped(ctx, "## Result", output)
+	if err != nil {
 		// Failing to marshal the failure is a real error — surface it so
 		// the framework records the panic-equivalent rather than swallowing.
 		return errors.Wrapf(ctx, err, "ai_review: marshal ## Result section (failed)")
 	}
-	return nil
-}
-
-// writeResult marshals any ResultOutput into the ## Result section.
-func (s *aiReviewStep) writeResult(
-	ctx context.Context,
-	md *agentlib.Markdown,
-	output ResultOutput,
-) error {
-	section, err := agentlib.MarshalSectionTyped(ctx, "## Result", output)
-	if err != nil {
-		return errors.Wrapf(ctx, err, "ai_review: marshal ## Result section")
-	}
 	md.ReplaceSection(section)
 	return nil
-}
-
-// finishProtectedBranch publishes the release through a pull request when the
-// direct push was rejected by branch protection. Order is load-bearing:
-// branch push → find/create PR → write ## Result with the PR URL → tag push.
-// Recording the PR URL before the irreversible tag push leaves a recoverable
-// pointer if the process dies between the two.
-func (s *aiReviewStep) finishProtectedBranch(
-	ctx context.Context,
-	md *agentlib.Markdown,
-	result *ResultOutput,
-	plan *PlanOutput,
-	output ReviewOutput,
-	pushErr error,
-	workdirShouldCleanup *bool,
-) (*agentlib.Result, error) {
-	repo, _ := md.Frontmatter.String("repo")
-	owner, name, ok := parseOwnerRepo(repo)
-	if !ok {
-		return s.failProtectedBranch(
-			ctx, md, output,
-			git.ErrorCategoryProtectedBranchRejected,
-			"cannot open pull request: unparseable repo "+repo,
-			workdirShouldCleanup,
-		)
-	}
-	if result.LocalTag == "" {
-		return s.failProtectedBranch(
-			ctx, md, output,
-			git.ErrorCategoryProtectedBranchRejected,
-			"cannot open pull request: missing local tag",
-			workdirShouldCleanup,
-		)
-	}
-
-	branch := "release/" + result.LocalTag
-	if err := s.ops.Push(
-		ctx, result.Workdir, "HEAD:refs/heads/release/"+result.LocalTag,
-	); err != nil {
-		return s.failProtectedBranch(
-			ctx, md, output,
-			git.ClassifyError(err),
-			"release branch push failed: "+err.Error(),
-			workdirShouldCleanup,
-		)
-	}
-
-	prURL, err := s.findOrCreatePullRequest(ctx, result, plan, owner, name, branch)
-	if err != nil {
-		return s.failProtectedBranch(
-			ctx, md, output,
-			git.ErrorCategoryUnknown,
-			err.Error(),
-			workdirShouldCleanup,
-		)
-	}
-
-	prResult := ResultOutput{
-		Outcome:        ResultOutcomeFailed,
-		Path:           ResultPathPRMerge,
-		ErrorCategory:  git.ErrorCategoryProtectedBranchRejected,
-		Error:          "push rejected by branch protection: " + pushErr.Error(),
-		PullRequestURL: prURL,
-	}
-	if err := s.writeResult(ctx, md, prResult); err != nil {
-		return nil, err
-	}
-
-	if err := s.ops.Push(ctx, result.Workdir, "refs/tags/"+result.LocalTag); err != nil {
-		glog.Warningf("ai_review: tag push after PR create failed: %v", err)
-		prResult.Error += "; tag push failed: " + err.Error()
-		if writeErr := s.writeResult(ctx, md, prResult); writeErr != nil {
-			return nil, writeErr
-		}
-	}
-
-	output.Approved = false
-	output.FailedChecks = append(output.FailedChecks, CheckPush)
-	output.Notes = "push rejected by branch protection; pull request: " + prURL
-	return s.finishHumanReview(ctx, md, output, workdirShouldCleanup)
-}
-
-// findOrCreatePullRequest resolves the base branch and reuses an open pull
-// request for head branch when one exists. It creates exactly one pull
-// request when none exists, and never creates a duplicate when the lookup
-// fails.
-func (s *aiReviewStep) findOrCreatePullRequest(
-	ctx context.Context,
-	result *ResultOutput,
-	plan *PlanOutput,
-	owner, name, branch string,
-) (string, error) {
-	base, err := s.prClient.DefaultBranch(ctx, owner, name)
-	if err != nil {
-		return "", errors.Wrapf(ctx, err, "default branch lookup failed")
-	}
-	prURL, found, err := s.prClient.FindOpenPullRequest(ctx, owner, name, branch)
-	if err != nil {
-		return "", errors.Wrapf(ctx, err, "open pull request lookup failed")
-	}
-	if found {
-		return prURL, nil
-	}
-	body, err := s.pullRequestBody(ctx, result, plan)
-	if err != nil {
-		return "", errors.Wrapf(ctx, err, "pull request body failed")
-	}
-	prURL, err = s.prClient.CreatePullRequest(
-		ctx, owner, name, "release "+result.LocalTag, branch, base, body,
-	)
-	if err != nil {
-		return "", errors.Wrapf(ctx, err, "pull request create failed")
-	}
-	return prURL, nil
-}
-
-// failProtectedBranch writes today's failure shape and parks the task at
-// human_review. Used for every PR-path failure before the pull request exists.
-func (s *aiReviewStep) failProtectedBranch(
-	ctx context.Context,
-	md *agentlib.Markdown,
-	output ReviewOutput,
-	category git.ErrorCategory,
-	message string,
-	workdirShouldCleanup *bool,
-) (*agentlib.Result, error) {
-	if err := s.writeFailureResult(ctx, md, category, message); err != nil {
-		return nil, err
-	}
-	output.Approved = false
-	output.Notes = message
-	output.FailedChecks = append(output.FailedChecks, CheckPush)
-	return s.finishHumanReview(ctx, md, output, workdirShouldCleanup)
-}
-
-// pullRequestBody reads the rewritten CHANGELOG section for the planned
-// version and returns it as the pull request body. An extraction failure is
-// fail-closed: the caller creates no pull request.
-func (s *aiReviewStep) pullRequestBody(
-	ctx context.Context,
-	result *ResultOutput,
-	plan *PlanOutput,
-) (string, error) {
-	changelogPath := filepath.Join(result.Workdir, changelogFileName)
-	content, err := os.ReadFile(
-		changelogPath,
-	) // #nosec G304 -- workdir is os.TempDir-rooted; filename is constant
-	if err != nil {
-		return "", errors.Wrapf(ctx, err, "ai_review: read CHANGELOG for pull request body")
-	}
-	body, err := changelog.ExtractSectionBody(
-		ctx,
-		content,
-		strings.TrimPrefix(plan.NextVersionHeader, "## "),
-	)
-	if err != nil {
-		return "", errors.Wrapf(ctx, err, "ai_review: extract pull request body")
-	}
-	return strings.TrimSpace(body), nil
 }
 
 // finishHumanReview writes the ## Review section (with the failed

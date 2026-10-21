@@ -46,30 +46,6 @@ instead of cutting a major — the release will sit unreleased until a human sig
 the bullet wording is softened to a non-breaking `feat`/`fix`. Keep this in mind when a
 merged PR does not produce a tag.
 
-### Branch-protection bypass
-
-The direct push relies on the releaser's GitHub App being a bypass actor. On 2026-10-21
-that fast path did not land for one repo, so the evidence and the current best guess are
-recorded here rather than left in a task thread.
-
-**Observed evidence.** The releaser app installation (`Integration 3907226`) is listed
-with `bypass_mode: always` in the `master-protection` ruleset of `bborbe/go-skeleton`,
-`bborbe/nuke`, and `bborbe/sun`. On 2026-10-21 `nuke` and `sun` released successfully
-while `go-skeleton` was rejected with `GH013`. `go-skeleton` alone sets
-`strict_required_status_checks_policy: true` with three required checks.
-
-**Leading hypothesis.** The bypass is not reaching this repo/app pair, or the push
-identity differs from the documented assumption. This is a hypothesis, not a confirmed
-cause — the bypass is not broken in general (two of the three repos released with it);
-the root cause is unresolved and tracked as a follow-up.
-
-**Operational consequence.** The agent now falls back to a pull request, so a protected
-repo still produces a reviewable release: the release commit lands on
-`release/<tag>`, a PR is opened, the tag is pushed, and the task parks at
-`human_review` with the PR URL. A task parked at `human_review` with a PR URL is
-resolved by the operator merging that PR (spec 004 § Failure Modes, "Tag pushed, PR
-never merged") — not by re-driving the task.
-
 ## Verifying a release shipped
 
 ```bash
