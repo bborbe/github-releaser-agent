@@ -5,11 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- revert: drop the protected-branch pull-request fallback. The releaser pushes the release commit and tag directly, and a branch-protection rejection is not the agent's to solve: on a personal account, classic branch protection has no per-App bypass, so it blocks the App no matter what the ruleset allows. The fix is to delete the classic protection so the ruleset governs — verified 2026-10-21 by a live release landing on `bborbe/notification-controller` immediately after that removal.
+
 ## v0.5.0
 
 - fix: When branch protection rejects the direct push (`GH013` / `GH006`), the releaser falls back to a pull request — it pushes the release commit to `release/<tag>`, opens a PR titled `release <tag>` with the CHANGELOG section as the body, pushes the annotated tag, and parks the task at `human_review` with the PR URL instead of failing, leaving the merge to a human and never force-pushing.
 - feat: Record the protected-branch fallback on the task page as `path: "pr-merge"` with `pull_request_url`, reusing an already-open `release/<tag>` pull request instead of opening a second one.
-
 ## v0.4.20
 
 - chore: update Go to 1.27.3 and github.com/bborbe/agent to v0.112.0, github.com/bborbe/kafka to v1.28.4, github.com/bborbe/vault-cli to v0.177.0

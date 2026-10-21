@@ -55,27 +55,6 @@ var _ = Describe("ClassifyError", func() {
 			errors.New("remote: error: branch master: required status checks have failed"),
 			git.ErrorCategoryProtectedBranchRejected),
 		Entry(
-			"protected_branch_rejected — bare GH013 without other classifier token",
-			errors.New(
-				"remote: error: GH013: Repository rule violations found for refs/heads/master.\nremote: - Changes must be made through a pull request",
-			),
-			git.ErrorCategoryProtectedBranchRejected,
-		),
-		Entry(
-			"protected_branch_rejected — verbatim prod GH013 sample",
-			errors.New(
-				"push failed: git push: remote: error: GH013: Repository rule violations found for refs/heads/master.\nremote: Review all repository rules at https://github.com/bborbe/go-skeleton/rules?ref=refs%2Fheads%2Fmaster\nremote:\nremote: - Changes must be made through a pull request.\nremote:\nremote: - 3 of 3 required status checks are expected.\nremote:\nTo https://github.com/bborbe/go-skeleton.git\n ! [remote rejected] HEAD -> master (push declined due to repository rule violations)\n ! [remote rejected] v0.6.3 -> v0.6.3 (atomic transaction failed)\nerror: failed to push some refs to 'https://github.com/bborbe/go-skeleton.git'",
-			),
-			git.ErrorCategoryProtectedBranchRejected,
-		),
-		Entry(
-			"protected_branch_rejected — GH013 ordered before non-fast-forward",
-			errors.New(
-				"remote: error: GH013: Repository rule violations found\n! [rejected] master -> master (non-fast-forward)",
-			),
-			git.ErrorCategoryProtectedBranchRejected,
-		),
-		Entry(
 			"push_non_fast_forward — remote contains work",
 			errors.New(
 				"! [rejected] master -> master\nUpdates were rejected because the remote contains work that you do not have locally",
