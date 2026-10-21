@@ -22,12 +22,21 @@ producer that emits release tasks is
 4. Rewrite `## Unreleased` → `## vX.Y.Z` in `CHANGELOG.md`.
 5. Commit (`CHANGELOG.md` only — explicit path, never `git add -A`), tag
    `vX.Y.Z`, and push commit + tag to `master`.
+6. If branch protection rejects that direct push (`GH013` / `GH006`), fall back
+   to a pull request instead of failing: push the release commit to
+   `release/<tag>`, open a pull request titled `release <tag>` against the
+   default branch with the CHANGELOG section as its body, push the annotated
+   tag, and park the task at `human_review` naming the PR URL. A human merges
+   the PR — the agent never merges it and never force-pushes. An already-open
+   PR for the same head branch is reused rather than duplicated.
 
-On a protected branch the push works because the releaser's GitHub App is a
-**bypass actor** in the repo's `master-protection` ruleset (see
+On a protected branch the direct push is the intended path: it works because
+the releaser's GitHub App is a **bypass actor** in the repo's
+`master-protection` ruleset (see
 [`bborbe/maintainer`](https://github.com/bborbe/maintainer) — safety model:
 the git writes are deterministic Go, not the LLM, and can only ever land a
-CHANGELOG + tag change).
+CHANGELOG + tag change). Step 6 describes what happens when that bypass does
+not land.
 
 ## Run modes
 
