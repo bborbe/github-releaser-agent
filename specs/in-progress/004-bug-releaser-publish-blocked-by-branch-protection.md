@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-10-21T16:39:03Z"
 generating: "2026-10-21T16:40:10Z"
 prompted: "2026-10-21T16:51:35Z"
+verifying: "2026-10-21T17:02:38Z"
 branch: dark-factory/bug-releaser-publish-blocked-by-branch-protection
 ---
 
