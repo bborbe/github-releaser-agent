@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [004-bug-releaser-publish-blocked-by-branch-protection]
+summary: 'Added the branch-protection pull-request fallback: new githubpullrequest client, pr-merge result shape, ai-review routing with PR reuse and ordered tag push, factory wiring, and tests'
+execution_id: github-releaser-agent-exec-012-spec-004-pr-fallback
+dark-factory-version: v0.198.7
 created: "2026-10-21T16:43:00Z"
 queued: "2026-10-21T16:57:01Z"
+started: "2026-10-21T16:59:25Z"
+completed: "2026-10-21T17:02:38Z"
 branch: dark-factory/bug-releaser-publish-blocked-by-branch-protection
 ---
 

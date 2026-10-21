@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 - fix: When branch protection rejects the direct push (`GH013` / `GH006`), the releaser falls back to a pull request — it pushes the release commit to `release/<tag>`, opens a PR titled `release <tag>` with the CHANGELOG section as the body, pushes the annotated tag, and parks the task at `human_review` with the PR URL instead of failing, leaving the merge to a human and never force-pushing.
+- feat: Record the protected-branch fallback on the task page as `path: "pr-merge"` with `pull_request_url`, reusing an already-open `release/<tag>` pull request instead of opening a second one.
 
 ## v0.4.20
 
