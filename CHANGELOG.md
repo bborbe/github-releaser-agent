@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.6.0
 
 - revert: drop the protected-branch pull-request fallback. The releaser pushes the release commit and tag directly, and a branch-protection rejection is not the agent's to solve: on a personal account, classic branch protection has no per-App bypass, so it blocks the App no matter what the ruleset allows. The fix is to delete the classic protection so the ruleset governs — verified 2026-10-21 by a live release landing on `bborbe/notification-controller` immediately after that removal.
 
