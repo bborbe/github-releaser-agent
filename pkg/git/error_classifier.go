@@ -85,9 +85,9 @@ type classifierEntry struct {
 //
 // Order rationale:
 //   - Protected-branch fragments scanned BEFORE generic push fragments
-//     ("non-fast-forward") because GitHub's GH006 message can include
-//     both "Protected branch" and "non-fast-forward" tokens in some
-//     server responses.
+//     ("non-fast-forward") because GitHub's GH006 and GH013 (repository
+//     rules) messages can include both protected-branch and
+//     "non-fast-forward" tokens in some server responses.
 //   - tag-collision fragments before auth/repo because tag failures
 //     are short-circuited at the tag step, but defensive ordering
 //     remains.
@@ -97,6 +97,12 @@ var classifierTable = []classifierEntry{
 	{Fragment: "GH006", Category: ErrorCategoryProtectedBranchRejected},
 	{Fragment: "Required reviews", Category: ErrorCategoryProtectedBranchRejected},
 	{Fragment: "required status checks", Category: ErrorCategoryProtectedBranchRejected},
+	// GH013 is GitHub's repository-rules rejection (branch protection /
+	// ruleset), e.g. "GH013: Repository rule violations found for
+	// refs/heads/master" followed by "Changes must be made through a pull
+	// request". Spec 004 — the push path falls back to a pull request on
+	// this category.
+	{Fragment: "GH013", Category: ErrorCategoryProtectedBranchRejected},
 	// Non-fast-forward (push step).
 	{Fragment: "non-fast-forward", Category: ErrorCategoryPushNonFastForward},
 	{
