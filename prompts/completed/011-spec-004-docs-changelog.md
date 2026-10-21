@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [004-bug-releaser-publish-blocked-by-branch-protection]
+summary: Added the `## Unreleased` pull-request-fallback changelog bullet, documented the fallback in README § How it works and docs/dod.md § Git-Write Safety, and recorded the bypass evidence, leading hypothesis, and operator recovery step in the releasing runbook; `make precommit` exits 0.
+execution_id: github-releaser-agent-exec-011-spec-004-docs-changelog
+dark-factory-version: v0.198.7
 created: "2026-10-21T16:44:00Z"
 queued: "2026-10-21T16:54:49Z"
+started: "2026-10-21T16:57:36Z"
+completed: "2026-10-21T16:59:23Z"
 branch: dark-factory/bug-releaser-publish-blocked-by-branch-protection
 ---
 
