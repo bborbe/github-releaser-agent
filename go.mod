@@ -1,21 +1,21 @@
 module github.com/bborbe/github-releaser-agent
 
-go 1.27.2
+go 1.27.3
 
 replace (
 	github.com/opencontainers/runtime-spec => github.com/opencontainers/runtime-spec v1.2.0
 )
 
 require (
-	github.com/bborbe/agent v0.104.0
+	github.com/bborbe/agent v0.112.0
 	github.com/bborbe/cqrs v0.6.12
 	github.com/bborbe/errors v1.6.3
-	github.com/bborbe/kafka v1.28.3
+	github.com/bborbe/kafka v1.28.4
 	github.com/bborbe/maintainer v0.50.12
 	github.com/bborbe/sentry v1.10.5
 	github.com/bborbe/service v1.11.0
 	github.com/bborbe/time v1.27.17
-	github.com/bborbe/vault-cli v0.176.1
+	github.com/bborbe/vault-cli v0.177.0
 	github.com/golang/glog v1.2.5
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.44.0
@@ -35,7 +35,7 @@ require (
 	github.com/bborbe/metrics v0.6.7 // indirect
 	github.com/bborbe/parse v1.12.3 // indirect
 	github.com/bborbe/run v1.11.2 // indirect
-	github.com/bborbe/strimzi v1.8.20 // indirect
+	github.com/bborbe/strimzi v1.8.21 // indirect
 	github.com/bborbe/validation v1.5.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bradleyfalzon/ghinstallation/v2 v2.19.0 // indirect
