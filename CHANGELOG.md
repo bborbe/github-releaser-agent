@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- fix: git subprocesses now inherit the proxy variables (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` and their lowercase spellings) when set, alongside `HOME` and `PATH`. The env allowlist carried only `HOME` and `PATH`, so every clone, `ls-remote` and push connected directly and would be refused in a proxy-only namespace while the rest of the pod reached the network through the proxy. The allowlist stays explicit — no other pod variable reaches git — and a test asserts an unrelated secret-shaped variable is not passed through.
+
 ## v0.6.0
 
 - revert: drop the protected-branch pull-request fallback. The releaser pushes the release commit and tag directly, and a branch-protection rejection is not the agent's to solve: on a personal account, classic branch protection has no per-App bypass, so it blocks the App no matter what the ruleset allows. The fix is to delete the classic protection so the ruleset governs — verified 2026-10-21 by a live release landing on `bborbe/notification-controller` immediately after that removal.

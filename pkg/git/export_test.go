@@ -7,3 +7,8 @@ package git
 var RedactTokenForTest = redactToken
 
 var ParseLsRemoteOutputForTest = parseLsRemoteOutput
+
+// CmdEnvForTest exposes the git subprocess env allowlist for tests.
+func CmdEnvForTest() []string {
+	return (&osExecGitOps{}).cmdEnv()
+}
