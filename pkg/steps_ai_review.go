@@ -159,7 +159,10 @@ func (s *aiReviewStep) ShouldRun(_ context.Context, _ *agentlib.Markdown) (bool,
 
 // Run executes the verification pipeline. Sequence:
 //  1. Read ## Result + ## Plan (fatal error if either missing).
-//  2. If Result.Outcome != "released" → short-circuit approved=true.
+//  2. If Result.Outcome != "released" → short-circuit: derive the planned
+//     tag from ## Plan, consult the remote ONCE for it, and park at
+//     human_review unless the remote carries the tag (in which case the
+//     task closes done).
 //  3. Three structural checks (TagExists, TagAtExpectedSHA,
 //     ChangelogHeaderRewritten). Each failure is recorded in
 //     FailedChecks but does NOT early-return — the full check set is
@@ -201,7 +204,7 @@ func (s *aiReviewStep) Run(ctx context.Context, md *agentlib.Markdown) (*agentli
 	}
 
 	if result.Outcome != ResultOutcomeReleased {
-		return s.writeShortCircuit(ctx, md)
+		return s.writeShortCircuit(ctx, md, plan)
 	}
 
 	repo, _ := md.Frontmatter.String("repo")
@@ -694,12 +697,32 @@ func (s *aiReviewStep) finishReviewOverride(
 	}, nil
 }
 
-// writeShortCircuit handles the Result.Outcome != released path: no
-// checks to run, the spec says approved=true with overall=pass.
+// writeShortCircuit handles the Result.Outcome != released path. The
+// failed result shape carries neither a tag nor a commit by contract, so
+// the planned tag is derived from ## Plan (the same expression execution
+// and the faithfulness check use) and the remote is consulted ONCE for it
+// through consultRemoteTag — that helper owns the skip guard, the auth
+// injection, and the lsRemoteTimeout bound.
+//
+// The observation alone decides the routing:
+//   - consult skipped (missing clone_url / ref / planned tag) → park
+//   - consult errored (including the timeout deadline) → park
+//   - remote does not carry the tag (empty SHA) → park
+//   - remote carries the tag (non-empty SHA) → close done
+//
+// "Park" deliberately returns AgentStatusDone / human_review rather than
+// AgentStatusFailed: a Failed status preserves the incoming `phase:
+// ai_review` in the deliverer and re-triggers the record forever, while
+// Done + human_review resolves to a phase the executor does not re-trigger.
+// An unasked or unreachable remote is never evidence of a release, so
+// `done` is reachable only on a positive observation.
 func (s *aiReviewStep) writeShortCircuit(
 	ctx context.Context,
 	md *agentlib.Markdown,
+	plan *PlanOutput,
 ) (*agentlib.Result, error) {
+	tag := strings.TrimPrefix(plan.NextVersionHeader, "## ")
+	obs := s.consultRemoteTag(ctx, md, tag)
 	output := ReviewOutput{
 		Approved: true,
 		Checks: ReviewChecks{
@@ -716,6 +739,15 @@ func (s *aiReviewStep) writeShortCircuit(
 		return nil, errors.Wrapf(ctx, err, "ai_review: marshal ## Review section")
 	}
 	md.ReplaceSection(section)
+	// An unasked, errored, or tag-absent remote is not evidence of a
+	// release: park for a human. Err is evaluated before the SHA so a
+	// partial observation never reaches "done".
+	if !obs.Consulted || obs.Err != nil || obs.SHA == "" {
+		return &agentlib.Result{
+			Status:    agentlib.AgentStatusDone,
+			NextPhase: string(domain.TaskPhaseHumanReview),
+		}, nil
+	}
 	return &agentlib.Result{
 		Status:    agentlib.AgentStatusDone,
 		NextPhase: "done",

@@ -105,10 +105,12 @@ var _ = Describe("AIReviewStep", func() {
 			"task_type: github-release\n" +
 			"repo: bborbe/example\n" +
 			"task_identifier: gh-release-001\n" +
+			"clone_url: https://github.com/bborbe/example.git\n" +
+			"ref: main\n" +
 			"---\n\n"
 		plan := "## Plan\n\n" +
 			"```json\n" +
-			`{"outcome":"ready"}` + "\n" +
+			`{"outcome":"ready","next_version":"0.7.0","next_version_header":"## v0.7.0"}` + "\n" +
 			"```\n\n"
 		result := "## Result\n\n" +
 			"```json\n" +
@@ -443,23 +445,26 @@ var _ = Describe("AIReviewStep", func() {
 		})
 
 		Context("7g. Short-circuit: Result.outcome != released", func() {
-			It("no HTTP calls, approved:true, status:done, next_phase:done", func() {
-				result, md := runStep(taskWithFailedResult())
+			It(
+				"no HTTP calls, one LsRemote consult, approved:true, parked at human_review",
+				func() {
+					fakeOps.LsRemoteReturns("", nil)
 
-				Expect(fakeClient.TagExistsCallCount()).To(Equal(0))
-				Expect(fakeClient.ResolveTagCommitCallCount()).To(Equal(0))
-				Expect(fakeClient.FetchChangelogCallCount()).To(Equal(0))
+					result, md := runStep(taskWithFailedResult())
 
-				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
-				Expect(result.NextPhase).To(Equal("done"))
+					Expect(fakeClient.TagExistsCallCount()).To(Equal(0))
+					Expect(fakeClient.ResolveTagCommitCallCount()).To(Equal(0))
+					Expect(fakeClient.FetchChangelogCallCount()).To(Equal(0))
 
-				review := extractReview(md)
-				Expect(review.Approved).To(BeTrue())
-				Expect(review.Checks.TagExists).To(BeTrue())
-				Expect(review.Checks.TagAtExpectedSHA).To(BeTrue())
-				Expect(review.Checks.ChangelogHeaderRewritten).To(BeTrue())
-				Expect(review.Notes).To(ContainSubstring("nothing to verify"))
-			})
+					Expect(fakeOps.LsRemoteCallCount()).To(Equal(1))
+					Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+					Expect(result.NextPhase).To(Equal("human_review"))
+
+					review := extractReview(md)
+					Expect(review.Approved).To(BeTrue())
+					Expect(review.Checks.ChangelogHeaderRewritten).To(BeTrue())
+				},
+			)
 		})
 
 		Context("7h. Malformed ## Result JSON", func() {
@@ -1237,19 +1242,20 @@ var _ = Describe("AIReviewStep", func() {
 				Expect(confirmed.Outcome).To(Equal(pkg.ResultOutcomeReleased))
 			})
 
-			// (f) short-circuit path (Result.Outcome == "failed") is
-			// unchanged. The new branch is unreachable. LsRemote
-			// must NOT be called.
+			// (f) the short-circuit path (Result.Outcome == "failed")
+			// consults the remote ONCE for the planned tag. An absent
+			// tag parks the task at human_review, and no
+			// ## Review Warning is written on this path.
 			It(
-				"Result.Outcome=failed short-circuits without LsRemote (no ## Review Warning)",
+				"Result.Outcome=failed consults the remote once, absent tag parks at human_review (no ## Review Warning)",
 				func() {
-					fakeOps.LsRemoteReturns("abc123", nil)
+					fakeOps.LsRemoteReturns("", nil)
 
 					result, md := runStep(taskWithFailedResult())
 
 					Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
-					Expect(result.NextPhase).To(Equal("done"))
-					Expect(fakeOps.LsRemoteCallCount()).To(Equal(0))
+					Expect(result.NextPhase).To(Equal("human_review"))
+					Expect(fakeOps.LsRemoteCallCount()).To(Equal(1))
 
 					review := extractReview(md)
 					Expect(review.Approved).To(BeTrue())
@@ -1429,6 +1435,54 @@ var _ = Describe("AIReviewStep", func() {
 					Expect(body).NotTo(ContainSubstring(`"outcome":"released"`))
 				},
 			)
+		})
+
+		// Spec 004 — the failed-outcome short-circuit asks the remote ONCE
+		// about the planned tag before deciding anything. An absent,
+		// errored, or unasked remote parks the task; only a positive
+		// observation closes it.
+		Context("short-circuit remote decision (spec 004)", func() {
+			It("ShortCircuitRemoteAbsentParksHumanReview", func() {
+				fakeOps.LsRemoteReturns("", nil)
+
+				result, md := runStep(taskWithFailedResult())
+
+				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+				Expect(result.NextPhase).To(Equal("human_review"))
+				Expect(fakeOps.LsRemoteCallCount()).To(Equal(1))
+				_, _, _, tagArg := fakeOps.LsRemoteArgsForCall(0)
+				Expect(tagArg).To(Equal("v0.7.0"))
+				Expect(md).NotTo(BeNil())
+			})
+
+			It("ShortCircuitTagPresentCloses", func() {
+				fakeOps.LsRemoteReturns("abc1234e3cca37862f4e612a7b14c4e00af6b935", nil)
+
+				result, md := runStep(taskWithFailedResult())
+
+				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+				Expect(result.NextPhase).To(Equal("done"))
+				Expect(fakeOps.LsRemoteCallCount()).To(Equal(1))
+
+				review := extractReview(md)
+				Expect(review.Checks.TagExists).To(BeTrue())
+				Expect(review.Approved).To(BeTrue())
+
+				body, err := md.Marshal(context.Background())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(body).To(ContainSubstring(`"outcome":"failed"`))
+			})
+
+			It("ShortCircuitConsultErrorParksHumanReview", func() {
+				fakeOps.LsRemoteReturns("", errors.New("ls-remote boom"))
+
+				result, md := runStep(taskWithFailedResult())
+
+				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+				Expect(result.NextPhase).To(Equal("human_review"))
+				Expect(fakeOps.LsRemoteCallCount()).To(Equal(1))
+				Expect(md).NotTo(BeNil())
+			})
 		})
 	})
 })
