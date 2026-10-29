@@ -1,8 +1,14 @@
 ---
-status: approved
+status: completed
+summary: 'The failed-outcome short-circuit''s ## Review block now reports tag_exists from the observation, never reports tag_at_expected_sha, and its notes carry the short-circuit token plus the planned tag and the observed state; one glog.V(2) decision line added; the three existing fixtures extended and a skip-guard fixture added.'
 spec: [004-bug-ai-review-closes-rejected-release-as-completed]
+execution_id: github-releaser-agent-ai-review-shortcircuit-exec-011-spec-004-shortcircuit-review-reporting
+dark-factory-version: v0.198.7
 created: "2026-10-28T11:02:40Z"
 queued: "2026-10-28T11:18:18Z"
+started: "2026-10-28T12:58:13Z"
+completed: "2026-10-29T21:12:00Z"
+
 ---
 
 # Report only what the short-circuit observed: real `tag_exists`, never `tag_at_expected_sha`, and a named short-circuit

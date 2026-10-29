@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- fix: a release whose `## Result` is `failed` is no longer recorded as `completed` unless the remote confirms the planned tag. The `ai_review` short-circuit now asks the remote once before any terminal decision, so a tag that is absent, or a remote that cannot be asked, parks the task at `phase: human_review` / `status: in_progress` instead of closing it. The `## Review` block reports only what was actually observed rather than hardcoding every check `true`, and a rejected release stays visible instead of being re-triggered into a false completion.
+
 ## v0.6.2
 
 - chore: update github.com/bborbe/agent to v0.132.5, github.com/bborbe/cqrs to v0.6.15, github.com/bborbe/errors to v1.6.5, github.com/bborbe/kafka to v1.29.2, github.com/bborbe/maintainer to v0.50.14, github.com/bborbe/sentry to v1.10.6, github.com/bborbe/service to v1.11.2, github.com/bborbe/time to v1.27.19, github.com/bborbe/vault-cli to v0.184.0

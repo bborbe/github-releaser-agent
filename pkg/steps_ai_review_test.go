@@ -16,10 +16,14 @@ import (
 
 	agentlib "github.com/bborbe/agent"
 	claudelib "github.com/bborbe/agent/claude"
+	"github.com/bborbe/cqrs/base"
 	"github.com/bborbe/github-releaser-agent/mocks"
 	pkg "github.com/bborbe/github-releaser-agent/pkg"
+	"github.com/bborbe/github-releaser-agent/pkg/factory"
 	"github.com/bborbe/github-releaser-agent/pkg/git"
 	"github.com/bborbe/github-releaser-agent/pkg/githubreview"
+	libkafkamocks "github.com/bborbe/kafka/mocks"
+	libtime "github.com/bborbe/time"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -107,6 +111,26 @@ var _ = Describe("AIReviewStep", func() {
 			"task_identifier: gh-release-001\n" +
 			"clone_url: https://github.com/bborbe/example.git\n" +
 			"ref: main\n" +
+			"---\n\n"
+		plan := "## Plan\n\n" +
+			"```json\n" +
+			`{"outcome":"ready","next_version":"0.7.0","next_version_header":"## v0.7.0"}` + "\n" +
+			"```\n\n"
+		result := "## Result\n\n" +
+			"```json\n" +
+			`{"outcome":"failed","error_category":"unknown","error":"clone failed"}` + "\n" +
+			"```\n"
+		return fm + plan + result
+	}
+
+	taskWithFailedResultNoRemote := func() string {
+		const fm = "---\n" +
+			"status: in_progress\n" +
+			"phase: ai_review\n" +
+			"assignee: github-releaser-agent\n" +
+			"task_type: github-release\n" +
+			"repo: bborbe/example\n" +
+			"task_identifier: gh-release-001\n" +
 			"---\n\n"
 		plan := "## Plan\n\n" +
 			"```json\n" +
@@ -1450,6 +1474,13 @@ var _ = Describe("AIReviewStep", func() {
 				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
 				Expect(result.NextPhase).To(Equal("human_review"))
 				Expect(fakeOps.LsRemoteCallCount()).To(Equal(1))
+
+				review := extractReview(md)
+				Expect(review.Checks.TagExists).To(BeFalse())
+				Expect(review.Checks.TagAtExpectedSHA).To(BeFalse())
+				Expect(review.Notes).To(ContainSubstring("short-circuit"))
+				Expect(review.Notes).To(ContainSubstring("v0.7.0"))
+
 				_, _, _, tagArg := fakeOps.LsRemoteArgsForCall(0)
 				Expect(tagArg).To(Equal("v0.7.0"))
 				Expect(md).NotTo(BeNil())
@@ -1466,6 +1497,8 @@ var _ = Describe("AIReviewStep", func() {
 
 				review := extractReview(md)
 				Expect(review.Checks.TagExists).To(BeTrue())
+				Expect(review.Checks.TagAtExpectedSHA).To(BeFalse())
+				Expect(review.Notes).To(ContainSubstring("short-circuit"))
 				Expect(review.Approved).To(BeTrue())
 
 				body, err := md.Marshal(context.Background())
@@ -1481,8 +1514,106 @@ var _ = Describe("AIReviewStep", func() {
 				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
 				Expect(result.NextPhase).To(Equal("human_review"))
 				Expect(fakeOps.LsRemoteCallCount()).To(Equal(1))
-				Expect(md).NotTo(BeNil())
+
+				review := extractReview(md)
+				Expect(review.Checks.TagExists).To(BeFalse())
+				Expect(review.Checks.TagAtExpectedSHA).To(BeFalse())
+				Expect(review.Notes).To(ContainSubstring("short-circuit"))
 			})
+
+			It(
+				"ShortCircuitSkipGuardParksHumanReview — missing clone_url/ref skips the consult → parked, notes name the skip",
+				func() {
+					result, md := runStep(taskWithFailedResultNoRemote())
+
+					Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+					Expect(result.NextPhase).To(Equal("human_review"))
+					Expect(fakeOps.LsRemoteCallCount()).To(Equal(0))
+
+					review := extractReview(md)
+					Expect(review.Checks.TagExists).To(BeFalse())
+					Expect(review.Checks.TagAtExpectedSHA).To(BeFalse())
+					Expect(review.Notes).To(ContainSubstring("short-circuit"))
+					Expect(review.Notes).To(Or(
+						ContainSubstring("clone_url"),
+						ContainSubstring("ref"),
+						ContainSubstring("next-version header"),
+					))
+				},
+			)
+		})
+
+		Context("two-run chain through the deliverer (spec 004)", func() {
+			// deliverAndUnwrapTask publishes res through the real Kafka
+			// deliverer and returns the task object the message carries. The
+			// published value is the serialized base.Command, not the
+			// CommandObject, so the event is unwrapped via base.ParseEvent.
+			deliverAndUnwrapTask := func(md *agentlib.Markdown, res *agentlib.Result) *agentlib.Task {
+				output, err := md.Marshal(context.Background())
+				Expect(err).NotTo(HaveOccurred())
+
+				syncProducer := &libkafkamocks.KafkaSyncProducer{}
+				deliverer := factory.CreateKafkaResultDeliverer(
+					syncProducer,
+					base.TopicPrefix(""),
+					agentlib.TaskIdentifier("gh-release-001"),
+					taskWithFailedResult(),
+					libtime.CurrentDateTimeGetterFunc(
+						func() libtime.DateTime { return libtime.DateTime{} },
+					),
+				)
+				Expect(deliverer.DeliverResult(context.Background(), agentlib.AgentResultInfo{
+					Status:    res.Status,
+					NextPhase: res.NextPhase,
+					Output:    output,
+					Message:   res.Message,
+				})).To(Succeed())
+
+				Expect(syncProducer.SendMessageCallCount()).To(Equal(1))
+				_, msg := syncProducer.SendMessageArgsForCall(0)
+				raw, err := msg.Value.Encode()
+				Expect(err).NotTo(HaveOccurred())
+
+				var cmd base.Command
+				Expect(json.Unmarshal(raw, &cmd)).To(Succeed())
+
+				event, err := base.ParseEvent(context.Background(), cmd.Data)
+				Expect(err).NotTo(HaveOccurred())
+
+				eventJSON, err := json.Marshal(event)
+				Expect(err).NotTo(HaveOccurred())
+
+				var task agentlib.Task
+				Expect(json.Unmarshal(eventJSON, &task)).To(Succeed())
+				return &task
+			}
+
+			It(
+				"TwoRunChainParksHumanReview — two runs over the same page publish in_progress / human_review",
+				func() {
+					fakeOps.LsRemoteReturns("", nil)
+
+					md, err := agentlib.ParseMarkdown(context.Background(), taskWithFailedResult())
+					Expect(err).NotTo(HaveOccurred())
+
+					first, err := step.Run(context.Background(), md)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(first.Status).To(Equal(agentlib.AgentStatusDone))
+					Expect(first.NextPhase).To(Equal("human_review"))
+
+					second, err := step.Run(context.Background(), md)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(second.NextPhase).To(Equal("human_review"))
+					Expect(fakeOps.LsRemoteCallCount()).To(Equal(2))
+
+					task := deliverAndUnwrapTask(md, second)
+
+					Expect(task.Frontmatter["status"]).To(Equal("in_progress"))
+					Expect(task.Frontmatter["phase"]).To(Equal("human_review"))
+					Expect(task.Frontmatter["status"]).NotTo(Equal("completed"))
+					Expect(task.Frontmatter["phase"]).NotTo(Equal("done"))
+				},
+			)
 		})
 	})
 })

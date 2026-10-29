@@ -1,8 +1,11 @@
 ---
-status: approved
+status: completed
+summary: 'Two-run chain spec drives the parked result through the real Kafka deliverer and asserts the published task resolves to status: in_progress / phase: human_review; ## Unreleased changelog entry added. Implemented directly in the worktree after the daemon died mid-011, not by a container run.'
 spec: [004-bug-ai-review-closes-rejected-release-as-completed]
 created: "2026-10-28T11:02:40Z"
 queued: "2026-10-28T11:18:20Z"
+completed: "2026-10-29T21:12:00Z"
+
 ---
 
 # Prove the two-run chain resolves to in_progress / human_review and record the fix in the changelog
