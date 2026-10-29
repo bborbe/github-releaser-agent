@@ -93,8 +93,9 @@ type ReviewOutput struct {
 	Notes    string       `json:"notes"`
 
 	// PerEntry holds the per-entry semantic verdict produced by the
-	// faithfulness LLM call. Empty when Overall == OverallUnknown or
-	// when the execution step recorded failure (nothing to verify).
+	// faithfulness LLM call. Empty when Overall == OverallUnknown, and
+	// empty on the failed-outcome short-circuit path, where no release
+	// commit exists to compare the plan against.
 	PerEntry []FaithfulnessVerdict `json:"per_entry,omitempty"`
 
 	// Overall is the rolled-up semantic verdict: OverallPass |
@@ -159,7 +160,10 @@ func (s *aiReviewStep) ShouldRun(_ context.Context, _ *agentlib.Markdown) (bool,
 
 // Run executes the verification pipeline. Sequence:
 //  1. Read ## Result + ## Plan (fatal error if either missing).
-//  2. If Result.Outcome != "released" → short-circuit approved=true.
+//  2. If Result.Outcome != "released" → short-circuit: derive the planned
+//     tag from ## Plan, consult the remote ONCE for it, and park at
+//     human_review unless the remote carries the tag (in which case the
+//     task closes done).
 //  3. Three structural checks (TagExists, TagAtExpectedSHA,
 //     ChangelogHeaderRewritten). Each failure is recorded in
 //     FailedChecks but does NOT early-return — the full check set is
@@ -201,7 +205,7 @@ func (s *aiReviewStep) Run(ctx context.Context, md *agentlib.Markdown) (*agentli
 	}
 
 	if result.Outcome != ResultOutcomeReleased {
-		return s.writeShortCircuit(ctx, md)
+		return s.writeShortCircuit(ctx, md, plan)
 	}
 
 	repo, _ := md.Frontmatter.String("repo")
@@ -694,32 +698,122 @@ func (s *aiReviewStep) finishReviewOverride(
 	}, nil
 }
 
-// writeShortCircuit handles the Result.Outcome != released path: no
-// checks to run, the spec says approved=true with overall=pass.
+// writeShortCircuit handles the Result.Outcome != released path. The
+// failed result shape carries neither a tag nor a commit by contract, so
+// the planned tag is derived from ## Plan (the same expression execution
+// and the faithfulness check use) and the remote is consulted ONCE for it
+// through consultRemoteTag — that helper owns the skip guard, the auth
+// injection, and the lsRemoteTimeout bound.
+//
+// The observation alone decides the routing:
+//   - consult skipped (missing clone_url / ref / planned tag) → park
+//   - consult errored (including the timeout deadline) → park
+//   - remote does not carry the tag (empty SHA) → park
+//   - remote carries the tag (non-empty SHA) → close done
+//
+// The ## Review block it writes reports `tag_exists` from the observation
+// (never a literal), reports `tag_at_expected_sha` as false — a `failed`
+// page records no release commit, so the check has nothing to compare
+// against and is never evaluated here — and carries notes containing the
+// literal "short-circuit" plus the planned tag and the observed state.
+//
+// "Park" deliberately returns AgentStatusDone / human_review rather than
+// AgentStatusFailed: a Failed status preserves the incoming `phase:
+// ai_review` in the deliverer and re-triggers the record forever, while
+// Done + human_review resolves to a phase the executor does not re-trigger.
+// An unasked or unreachable remote is never evidence of a release, so
+// `done` is reachable only on a positive observation.
 func (s *aiReviewStep) writeShortCircuit(
 	ctx context.Context,
 	md *agentlib.Markdown,
+	plan *PlanOutput,
 ) (*agentlib.Result, error) {
+	tag := strings.TrimPrefix(plan.NextVersionHeader, "## ")
+	obs := s.consultRemoteTag(ctx, md, tag)
+	tagExists := obs.Consulted && obs.Err == nil && obs.SHA != ""
 	output := ReviewOutput{
 		Approved: true,
 		Checks: ReviewChecks{
-			TagExists:                true,
-			TagAtExpectedSHA:         true,
+			TagExists:                tagExists,
+			TagAtExpectedSHA:         false,
 			ChangelogHeaderRewritten: true,
 			FaithfulnessOK:           true,
 		},
 		Overall: OverallPass,
-		Notes:   "execution step recorded failure; nothing to verify",
+		Notes:   shortCircuitNotes(obs, tag),
 	}
 	section, err := agentlib.MarshalSectionTyped(ctx, "## Review", output)
 	if err != nil {
 		return nil, errors.Wrapf(ctx, err, "ai_review: marshal ## Review section")
 	}
 	md.ReplaceSection(section)
+	taskID, _ := md.Frontmatter.String("task_identifier")
+	decision := "human_review"
+	reason := shortCircuitReason(obs)
+	if tagExists {
+		decision = "done"
+	}
+	glog.V(2).Infof(
+		"ai_review short-circuit: task_id=%s tag=%s observed_remote_sha=%s decision=%s reason=%s err=%s",
+		taskID,
+		tag,
+		obs.SHA,
+		decision,
+		reason,
+		git.RedactToken(errorText(obs.Err)),
+	)
+	// An unasked, errored, or tag-absent remote is not evidence of a
+	// release: park for a human. Err is evaluated before the SHA so a
+	// partial observation never reaches "done".
+	if !tagExists {
+		return &agentlib.Result{
+			Status:    agentlib.AgentStatusDone,
+			NextPhase: string(domain.TaskPhaseHumanReview),
+		}, nil
+	}
 	return &agentlib.Result{
 		Status:    agentlib.AgentStatusDone,
 		NextPhase: "done",
 	}, nil
+}
+
+// shortCircuitReason names which observation state drove the routing.
+func shortCircuitReason(obs remoteObservation) string {
+	switch {
+	case !obs.Consulted:
+		return "skipped"
+	case obs.Err != nil:
+		return "failed"
+	case obs.SHA != "":
+		return "present"
+	default:
+		return "absent"
+	}
+}
+
+// shortCircuitNotes describes the failed-outcome short-circuit for the
+// ## Review notes: the literal "short-circuit", the planned tag, and the
+// observed state (tag present / tag absent / consult skipped / consult
+// failed). Error text is redacted before it reaches the durable page.
+func shortCircuitNotes(obs remoteObservation, tag string) string {
+	planned := tag
+	if planned == "" {
+		planned = "the plan carried no next-version header"
+	}
+	switch {
+	case !obs.Consulted:
+		return "short-circuit: remote consult skipped because clone_url, ref, or the planned tag (" +
+			planned + ") is missing; task parked for human review"
+	case obs.Err != nil:
+		return "short-circuit: remote consult failed for tag " + planned + ": " +
+			git.RedactToken(obs.Err.Error()) + "; task parked for human review"
+	case obs.SHA != "":
+		return "short-circuit: release confirmed, remote carries tag " + planned +
+			" at " + obs.SHA + "; task closed"
+	default:
+		return "short-circuit: remote does not carry tag " + planned +
+			"; task parked for human review"
+	}
 }
 
 // checkUnexpectedFileChange inspects the release commit's touched
