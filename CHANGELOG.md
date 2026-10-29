@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.6.3
 
 - fix: a release whose `## Result` is `failed` is no longer recorded as `completed` unless the remote confirms the planned tag. The `ai_review` short-circuit now asks the remote once before any terminal decision, so a tag that is absent, or a remote that cannot be asked, parks the task at `phase: human_review` / `status: in_progress` instead of closing it. The `## Review` block now derives `tag_exists` from the actual observation and reports `tag_at_expected_sha` as not evaluated, instead of hardcoding both to `true`, and a rejected release stays visible instead of being re-triggered into a false completion.
 
