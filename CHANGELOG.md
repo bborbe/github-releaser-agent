@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- chore: update github.com/bborbe/agent to v0.132.5, github.com/bborbe/cqrs to v0.6.15, github.com/bborbe/errors to v1.6.5, github.com/bborbe/kafka to v1.29.2, github.com/bborbe/maintainer to v0.50.14, github.com/bborbe/sentry to v1.10.6, github.com/bborbe/service to v1.11.2, github.com/bborbe/time to v1.27.19, github.com/bborbe/vault-cli to v0.184.0
+
 ## v0.6.1
 
 - fix: git subprocesses now inherit the proxy variables (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` and their lowercase spellings) when set, alongside `HOME` and `PATH`. The env allowlist carried only `HOME` and `PATH`, so every clone, `ls-remote` and push connected directly and would be refused in a proxy-only namespace while the rest of the pod reached the network through the proxy. The allowlist stays explicit — no other pod variable reaches git — and a test asserts an unrelated secret-shaped variable is not passed through.
