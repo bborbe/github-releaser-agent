@@ -95,6 +95,7 @@ trivy:
 	$(if $(wildcard .trivy-secret.yaml),--secret-config .trivy-secret.yaml,$(if $(wildcard $(ROOTDIR)/.trivy-secret.yaml),--secret-config $(ROOTDIR)/.trivy-secret.yaml,)) \
 	--scanners vuln,secret \
 	--skip-dirs vendor \
+	--skip-dirs prompts/log \
 	--quiet \
 	--no-progress \
 	--disable-telemetry \

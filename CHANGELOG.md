@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- feat: the `## Review` block now records `image_expected` and `image_exists` after the pushed tag is confirmed on the remote. A repo that opts into `dockerBuild.autoBuild` in `.maintainer.yaml` but has no image at the released tag fails the new `Image` check and parks the task at `human_review`; a repo that never opted in, an empty `destinations` list, and an unreachable registry are never reported as a missing image.
+
 ## v0.7.0
 
 - feat: build the image inside a cluster via `make build BUILD_TARGET=<cluster>`

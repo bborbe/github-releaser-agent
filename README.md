@@ -53,6 +53,13 @@ for exactly that reason. Setting `REPO_ALLOWLIST` on this agent has no effect.
 Per-repo opt-in is the target repo's `.maintainer.yaml` (`release.autoRelease: true`),
 enforced upstream by the release watcher.
 
+A repo that also sets `dockerBuild.autoBuild: true` is expected to publish an image at
+the released tag. After the pushed tag is confirmed on the remote, the `## Review` block
+records `image_expected` / `image_exists` by probing the primary destination; a missing
+image fails the `Image` check and parks the task at `human_review`. A repo that never
+opted in, an empty `destinations` list, and an unreachable registry are not reported as a
+missing image.
+
 ## Layout
 
 ```

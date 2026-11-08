@@ -1,8 +1,9 @@
 ---
-status: prompted
+status: verifying
 approved: "2026-10-28T10:55:17Z"
 generating: "2026-10-28T11:18:05Z"
 prompted: "2026-10-28T11:18:05Z"
+verifying: "2026-11-08T16:15:11Z"
 branch: dark-factory/bug-ai-review-closes-rejected-release-as-completed
 ---
 

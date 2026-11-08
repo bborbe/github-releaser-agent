@@ -20,6 +20,7 @@ import (
 	"github.com/bborbe/github-releaser-agent/pkg/githubchangelog"
 	"github.com/bborbe/github-releaser-agent/pkg/githubreview"
 	"github.com/bborbe/github-releaser-agent/pkg/githubtags"
+	"github.com/bborbe/github-releaser-agent/pkg/imageregistry"
 	"github.com/bborbe/github-releaser-agent/pkg/maintainerconfig"
 	libkafka "github.com/bborbe/kafka"
 	libtime "github.com/bborbe/time"
@@ -139,6 +140,8 @@ func CreateAgent(
 		reviewClient,
 		aiReviewRunner,
 		executionOps,
+		imageregistry.NewClient(),
+		maintainerConfigFetcher,
 		ghToken,
 	)
 
