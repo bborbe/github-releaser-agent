@@ -22,6 +22,7 @@ import (
 	"github.com/bborbe/github-releaser-agent/pkg/factory"
 	"github.com/bborbe/github-releaser-agent/pkg/git"
 	"github.com/bborbe/github-releaser-agent/pkg/githubreview"
+	"github.com/bborbe/github-releaser-agent/pkg/maintainerconfig"
 	libkafkamocks "github.com/bborbe/kafka/mocks"
 	libtime "github.com/bborbe/time"
 	. "github.com/onsi/ginkgo/v2"
@@ -51,19 +52,30 @@ func splitNonEmptyLines(s string) []string {
 var _ = Describe("AIReviewStep", func() {
 
 	var (
-		fakeClient *mocks.ReviewClient
-		fakeRunner *mocks.ClaudeRunnerMock
-		fakeOps    *mocks.GitOps
-		token      string
-		step       agentlib.Step
+		fakeClient           *mocks.ReviewClient
+		fakeRunner           *mocks.ClaudeRunnerMock
+		fakeOps              *mocks.GitOps
+		fakeImageRegistry    *mocks.ImageRegistryClient
+		fakeMaintainerConfig *mocks.MaintainerConfigFetcher
+		token                string
+		step                 agentlib.Step
 	)
 
 	BeforeEach(func() {
 		fakeClient = &mocks.ReviewClient{}
 		fakeRunner = &mocks.ClaudeRunnerMock{}
 		fakeOps = &mocks.GitOps{}
+		fakeImageRegistry = &mocks.ImageRegistryClient{}
+		fakeMaintainerConfig = &mocks.MaintainerConfigFetcher{}
 		token = "test-token"
-		step = pkg.NewAIReviewStep(fakeClient, fakeRunner, fakeOps, token)
+		step = pkg.NewAIReviewStep(
+			fakeClient,
+			fakeRunner,
+			fakeOps,
+			fakeImageRegistry,
+			fakeMaintainerConfig,
+			token,
+		)
 	})
 
 	// taskWithResult builds a task markdown with ## Result section.
@@ -1541,6 +1553,147 @@ var _ = Describe("AIReviewStep", func() {
 					))
 				},
 			)
+		})
+
+		Context("post-push image-existence check", func() {
+			const (
+				notOptedIn   = "release:\n  autoRelease: true\n"
+				autoBuildOff = "dockerBuild:\n  autoBuild: false\n  destinations:\n    - dockerhub\n"
+				noDests      = "dockerBuild:\n  autoBuild: true\n  destinations: []\n"
+				dockerHub    = "dockerBuild:\n  autoBuild: true\n  destinations:\n    - dockerhub\n"
+			)
+
+			// runConfirmedRelease drives a release whose pushed tag the
+			// remote confirms, so the image check is reached.
+			runConfirmedRelease := func() (*agentlib.Result, *agentlib.Markdown) {
+				DeferCleanup(func() { _ = os.RemoveAll(tmpDir) })
+				fakeOps.LsRemoteReturns("abc1234e3cca37862f4e612a7b14c4e00af6b935", nil)
+				return runStep(taskWithResultFull("abc1234", "v1.0.0", "released", tmpDir))
+			}
+
+			It("does not report a failure when the repo never opted in", func() {
+				fakeMaintainerConfig.FetchReturns([]byte(notOptedIn), nil)
+
+				result, md := runConfirmedRelease()
+
+				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+				review := extractReview(md)
+				Expect(review.Checks.ImageExpected).To(BeFalse())
+				Expect(review.Checks.ImageExists).To(BeFalse())
+				Expect(review.FailedChecks).NotTo(ContainElement(pkg.CheckImage))
+				Expect(fakeImageRegistry.ManifestExistsCallCount()).To(Equal(0))
+			})
+
+			It("does not report a failure when autoBuild is false", func() {
+				fakeMaintainerConfig.FetchReturns([]byte(autoBuildOff), nil)
+
+				result, md := runConfirmedRelease()
+
+				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+				review := extractReview(md)
+				Expect(review.Checks.ImageExpected).To(BeFalse())
+				Expect(review.Checks.ImageExists).To(BeFalse())
+				Expect(review.FailedChecks).NotTo(ContainElement(pkg.CheckImage))
+				Expect(fakeImageRegistry.ManifestExistsCallCount()).To(Equal(0))
+			})
+
+			It("treats a missing .maintainer.yaml as never opted in, with no note", func() {
+				fakeMaintainerConfig.FetchReturns(nil, maintainerconfig.ErrFileNotFound)
+
+				result, md := runConfirmedRelease()
+
+				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+				review := extractReview(md)
+				Expect(review.Checks.ImageExpected).To(BeFalse())
+				Expect(review.Checks.ImageExists).To(BeFalse())
+				Expect(review.FailedChecks).NotTo(ContainElement(pkg.CheckImage))
+				Expect(review.Notes).NotTo(ContainSubstring("image"))
+				Expect(fakeImageRegistry.ManifestExistsCallCount()).To(Equal(0))
+			})
+
+			It("notes the config gap when autoBuild is true with empty destinations", func() {
+				fakeMaintainerConfig.FetchReturns([]byte(noDests), nil)
+
+				result, md := runConfirmedRelease()
+
+				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+				review := extractReview(md)
+				Expect(review.Checks.ImageExpected).To(BeFalse())
+				Expect(review.Checks.ImageExists).To(BeFalse())
+				Expect(review.FailedChecks).NotTo(ContainElement(pkg.CheckImage))
+				Expect(review.Notes).To(ContainSubstring("dockerBuild.destinations is empty"))
+				Expect(fakeImageRegistry.ManifestExistsCallCount()).To(Equal(0))
+			})
+
+			It("records the image when the primary destination has it", func() {
+				fakeMaintainerConfig.FetchReturns([]byte(dockerHub), nil)
+				fakeImageRegistry.ManifestExistsReturns(true, nil)
+
+				result, md := runConfirmedRelease()
+
+				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+				review := extractReview(md)
+				Expect(review.Checks.ImageExpected).To(BeTrue())
+				Expect(review.Checks.ImageExists).To(BeTrue())
+				Expect(review.FailedChecks).NotTo(ContainElement(pkg.CheckImage))
+				Expect(fakeImageRegistry.ManifestExistsCallCount()).To(Equal(1))
+				_, probedRef := fakeImageRegistry.ManifestExistsArgsForCall(0)
+				Expect(probedRef).To(Equal("docker.io/bborbe/example:v1.0.0"))
+			})
+
+			It("fails the check when the image is genuinely absent", func() {
+				fakeMaintainerConfig.FetchReturns([]byte(dockerHub), nil)
+				fakeImageRegistry.ManifestExistsReturns(false, nil)
+
+				result, md := runConfirmedRelease()
+
+				Expect(result.Status).To(Equal(agentlib.AgentStatusNeedsInput))
+				Expect(result.NextPhase).To(Equal("human_review"))
+
+				review := extractReview(md)
+				Expect(review.Checks.ImageExpected).To(BeTrue())
+				Expect(review.Checks.ImageExists).To(BeFalse())
+				Expect(review.Approved).To(BeFalse())
+				Expect(review.Overall).To(Equal(pkg.OverallFail))
+				Expect(review.FailedChecks).To(ContainElement(pkg.CheckImage))
+				Expect(review.Notes).To(ContainSubstring(
+					"docker.io/bborbe/example:v1.0.0",
+				))
+				Expect(result.Message).To(ContainSubstring(
+					"docker.io/bborbe/example:v1.0.0",
+				))
+			})
+
+			It("does not fail the release when the registry errors", func() {
+				fakeMaintainerConfig.FetchReturns([]byte(dockerHub), nil)
+				fakeImageRegistry.ManifestExistsReturns(false, errors.New("dial tcp: refused"))
+
+				result, md := runConfirmedRelease()
+
+				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+				review := extractReview(md)
+				Expect(review.Checks.ImageExpected).To(BeTrue())
+				Expect(review.Checks.ImageExists).To(BeFalse())
+				Expect(review.FailedChecks).NotTo(ContainElement(pkg.CheckImage))
+				Expect(review.Notes).To(ContainSubstring("dial tcp: refused"))
+				Expect(review.Notes).To(ContainSubstring(
+					"docker.io/bborbe/example:v1.0.0",
+				))
+			})
+
+			It("does not run the check when the push is not confirmed", func() {
+				fakeMaintainerConfig.FetchReturns([]byte(dockerHub), nil)
+				fakeOps.LsRemoteReturns("", nil)
+				DeferCleanup(func() { _ = os.RemoveAll(tmpDir) })
+
+				result, _ := runStep(
+					taskWithResultFull("abc1234", "v1.0.0", "released", tmpDir),
+				)
+
+				Expect(result.Status).To(Equal(agentlib.AgentStatusFailed))
+				Expect(fakeMaintainerConfig.FetchCallCount()).To(Equal(0))
+				Expect(fakeImageRegistry.ManifestExistsCallCount()).To(Equal(0))
+			})
 		})
 
 		Context("two-run chain through the deliverer (spec 004)", func() {

@@ -6,6 +6,7 @@ package pkg
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,8 @@ import (
 	"github.com/bborbe/github-releaser-agent/pkg/changelog"
 	"github.com/bborbe/github-releaser-agent/pkg/git"
 	"github.com/bborbe/github-releaser-agent/pkg/githubreview"
+	"github.com/bborbe/github-releaser-agent/pkg/imageregistry"
+	"github.com/bborbe/github-releaser-agent/pkg/maintainerconfig"
 	"github.com/bborbe/github-releaser-agent/pkg/plugin"
 	"github.com/bborbe/github-releaser-agent/pkg/prompts"
 	domain "github.com/bborbe/vault-cli/pkg/domain"
@@ -50,6 +53,7 @@ const (
 	CheckFaithfulness         = "Faithfulness"
 	CheckUnexpectedFileChange = "UnexpectedFileChange"
 	CheckPush                 = "Push"
+	CheckImage                = "Image"
 )
 
 // FaithfulnessVerdict captures the semantic comparison of one entry from
@@ -64,9 +68,9 @@ type FaithfulnessVerdict struct {
 	Note    string `json:"note,omitempty"`
 }
 
-// ReviewChecks holds the boolean verification results. The first three
-// are the original structural checks; the remaining two are the new
-// ai-review-side gates.
+// ReviewChecks holds the boolean verification results: the three original
+// structural checks, the ai-review-side gates, and the image-existence
+// fields evaluated only after the pushed tag is confirmed on the remote.
 type ReviewChecks struct {
 	TagExists                bool `json:"tag_exists"`
 	TagAtExpectedSHA         bool `json:"tag_at_expected_sha"`
@@ -82,6 +86,18 @@ type ReviewChecks struct {
 	// It is the ai-review-side mirror of the executeLocalRelease
 	// pre-commit guard.
 	UnexpectedFileChange bool `json:"unexpected_file_change"`
+
+	// ImageExpected is true when the repo's .maintainer.yaml opts into
+	// dockerBuild.autoBuild with at least one destination. False when the
+	// repo never opted in, or when the opt-in carries an empty
+	// destinations list.
+	ImageExpected bool `json:"image_expected"`
+
+	// ImageExists is true when the primary destination's registry serves
+	// a manifest at the released tag. Always false when ImageExpected is
+	// false, and false when the probe could not determine existence
+	// (an unreachable registry is not an absence).
+	ImageExists bool `json:"image_exists"`
 }
 
 // ReviewOutput is the typed contract for the `## Review` JSON section the
@@ -119,33 +135,46 @@ type ReviewOutput struct {
 	// FailedChecks names the semantic / local checks that did not pass.
 	// Stable strings — referenced by spec AC 15 assertions.
 	// One or more of: CheckFaithfulness, CheckUnexpectedFileChange,
-	// CheckPush.
+	// CheckPush, CheckImage.
 	FailedChecks []string `json:"failed_checks,omitempty"`
 }
 
 // NewAIReviewStep wires the ai_review step with its GitHub REST API
 // client, the ClaudeRunner used to invoke the faithfulness LLM, the
-// GitOps seam used to push the local commit + tag, and the GitHub
-// token (used for authenticated API calls).
+// GitOps seam used to push the local commit + tag, the registry client and
+// .maintainer.yaml fetcher used by the post-push image check, and the
+// GitHub token (used for authenticated API calls).
 func NewAIReviewStep(
 	client githubreview.Client,
 	runner claudelib.ClaudeRunner,
 	ops git.GitOps,
+	imageRegistry imageregistry.Client,
+	maintainerConfig maintainerconfig.Fetcher,
 	ghToken string,
 ) agentlib.Step {
-	return &aiReviewStep{client: client, runner: runner, ops: ops, ghToken: ghToken}
+	return &aiReviewStep{
+		client:           client,
+		runner:           runner,
+		ops:              ops,
+		imageRegistry:    imageRegistry,
+		maintainerConfig: maintainerConfig,
+		ghToken:          ghToken,
+	}
 }
 
 // aiReviewStep implements agentlib.Step. It performs three remote
 // verification checks against the GitHub REST API, one local diff
 // check against the workdir, one semantic faithfulness check via the
 // Claude runner, and on success pushes the local commit + tag to the
-// remote.
+// remote. After the pushed tag is confirmed on the remote it probes the
+// primary image destination when the repo opted into dockerBuild.
 type aiReviewStep struct {
-	client  githubreview.Client
-	runner  claudelib.ClaudeRunner
-	ops     git.GitOps
-	ghToken string
+	client           githubreview.Client
+	runner           claudelib.ClaudeRunner
+	ops              git.GitOps
+	imageRegistry    imageregistry.Client
+	maintainerConfig maintainerconfig.Fetcher
+	ghToken          string
 }
 
 // Name implements agentlib.Step.
@@ -269,7 +298,7 @@ func (s *aiReviewStep) Run(ctx context.Context, md *agentlib.Markdown) (*agentli
 	if !output.Approved {
 		return s.finishNotApproved(ctx, md, result, output, &workdirShouldCleanup)
 	}
-	return s.finishApproved(ctx, md, result, output, &workdirShouldCleanup)
+	return s.finishApproved(ctx, md, result, output, owner, name, &workdirShouldCleanup)
 }
 
 // finishNotApproved is the `!approved` terminal branch. It consults the
@@ -371,6 +400,7 @@ func (s *aiReviewStep) finishApproved(
 	md *agentlib.Markdown,
 	result *ResultOutput,
 	output ReviewOutput,
+	owner, name string,
 	workdirShouldCleanup *bool,
 ) (*agentlib.Result, error) {
 	pushErr := s.ops.Push(
@@ -404,6 +434,26 @@ func (s *aiReviewStep) finishApproved(
 	if pushErr != nil || (obs.Consulted && !confirmed) {
 		return s.finishHumanReview(ctx, md, output, workdirShouldCleanup)
 	}
+	// The image check needs the tag on the remote: it runs only when
+	// reconcilePostPush reported the pushed tag confirmed. A skipped
+	// consult is not a confirmation, so the check is not run at all.
+	if confirmed {
+		terminal, checkErr := s.applyImageCheck(
+			ctx,
+			md,
+			result,
+			owner,
+			name,
+			&output,
+			workdirShouldCleanup,
+		)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		if terminal != nil {
+			return terminal, nil
+		}
+	}
 	section, err := agentlib.MarshalSectionTyped(ctx, "## Review", output)
 	if err != nil {
 		return nil, errors.Wrapf(ctx, err, "ai_review: marshal ## Review section")
@@ -414,6 +464,135 @@ func (s *aiReviewStep) finishApproved(
 		Status:    agentlib.AgentStatusDone,
 		NextPhase: "done",
 	}, nil
+}
+
+// applyImageCheck evaluates the post-push image-existence check. It is
+// called only when the pushed tag is confirmed on the remote, so the
+// released tag is known to exist before any registry is consulted.
+//
+// The check never blocks a release for a reason other than a genuinely
+// absent image:
+//   - repo never opted in (no block, autoBuild false/absent) → expected
+//     false, exists false, no failure, no note.
+//   - .maintainer.yaml absent at the tag (ErrFileNotFound) → same as never
+//     opted in.
+//   - autoBuild true with an empty destinations list → expected false,
+//     exists false, a note naming the config gap.
+//   - fetch / parse / registry error → expected true, exists false, a note
+//     naming the error and the probed reference; the release still closes.
+//   - autoBuild true with at least one destination → probe the primary
+//     destination. Present → exists true. Absent → a failed check routed to
+//     human_review.
+//
+// The returned *agentlib.Result is non-nil only on the genuinely-absent
+// terminal path; the caller then skips the Done transition.
+func (s *aiReviewStep) applyImageCheck(
+	ctx context.Context,
+	md *agentlib.Markdown,
+	result *ResultOutput,
+	owner, name string,
+	output *ReviewOutput,
+	workdirShouldCleanup *bool,
+) (*agentlib.Result, error) {
+	exp := s.resolveImageExpectation(ctx, owner, name, result.LocalTag)
+	output.Checks.ImageExpected = exp.expected
+	output.Checks.ImageExists = false
+	if exp.note != "" {
+		output.Notes = appendReviewNote(output.Notes, exp.note)
+	}
+	if !exp.probe {
+		return nil, nil
+	}
+
+	imageRef := exp.imageHost + "/" + owner + "/" + name + ":" + result.LocalTag
+	exists, err := s.imageRegistry.ManifestExists(ctx, imageRef)
+	if err != nil {
+		output.Notes = appendReviewNote(
+			output.Notes,
+			"image check failed for "+imageRef+": "+err.Error(),
+		)
+		return nil, nil
+	}
+	if exists {
+		output.Checks.ImageExists = true
+		return nil, nil
+	}
+
+	// Genuinely absent: the release produced no deployable artifact.
+	// Route straight to human_review with NeedsInput — an absent image
+	// does not change on retry, so the Failed status (a transient
+	// infrastructure signal) would re-run the push and the LLM call.
+	output.Overall = OverallFail
+	output.Approved = false
+	if !slices.Contains(output.FailedChecks, CheckImage) {
+		output.FailedChecks = append(output.FailedChecks, CheckImage)
+	}
+	output.Notes = appendReviewNote(output.Notes, "image not found: "+imageRef)
+	section, err := agentlib.MarshalSectionTyped(ctx, "## Review", *output)
+	if err != nil {
+		return nil, errors.Wrapf(ctx, err, "ai_review: marshal ## Review section")
+	}
+	md.ReplaceSection(section)
+	*workdirShouldCleanup = true
+	return &agentlib.Result{
+		Status:    agentlib.AgentStatusNeedsInput,
+		NextPhase: string(domain.TaskPhaseHumanReview),
+		Message:   output.Notes,
+	}, nil
+}
+
+// imageExpectation is the outcome of resolving the dockerBuild opt-in.
+type imageExpectation struct {
+	probe     bool
+	expected  bool
+	imageHost string
+	note      string
+}
+
+// resolveImageExpectation fetches .maintainer.yaml at the released tag and
+// resolves the dockerBuild opt-in. It never returns an error: fetch, parse
+// and config-gap conditions are carried as a non-fatal note so the release
+// still closes.
+func (s *aiReviewStep) resolveImageExpectation(
+	ctx context.Context,
+	owner, name, tag string,
+) imageExpectation {
+	raw, err := s.maintainerConfig.Fetch(ctx, owner, name, tag)
+	if err != nil {
+		if stderrors.Is(err, maintainerconfig.ErrFileNotFound) {
+			glog.V(2).Infof(
+				"ai_review image check: .maintainer.yaml absent at tag=%s — repo never opted in",
+				tag,
+			)
+			return imageExpectation{}
+		}
+		return imageExpectation{
+			expected: true,
+			note:     "image check could not fetch .maintainer.yaml: " + err.Error(),
+		}
+	}
+	expected, imageHost, destinationsEmpty, err := maintainerconfig.ParseDockerBuild(ctx, raw)
+	if err != nil {
+		return imageExpectation{
+			expected: true,
+			note:     "image check could not parse .maintainer.yaml: " + err.Error(),
+		}
+	}
+	if destinationsEmpty {
+		return imageExpectation{note: "dockerBuild.destinations is empty"}
+	}
+	if !expected {
+		return imageExpectation{}
+	}
+	return imageExpectation{probe: true, expected: true, imageHost: imageHost}
+}
+
+// appendReviewNote joins a non-fatal note onto the existing notes string.
+func appendReviewNote(existing, note string) string {
+	if existing == "" {
+		return note
+	}
+	return existing + "; " + note
 }
 
 // reconcilePostPush derives the ## Result outcome from the post-push
@@ -738,6 +917,8 @@ func (s *aiReviewStep) writeShortCircuit(
 			TagAtExpectedSHA:         false,
 			ChangelogHeaderRewritten: true,
 			FaithfulnessOK:           true,
+			ImageExpected:            false,
+			ImageExists:              false,
 		},
 		Overall: OverallPass,
 		Notes:   shortCircuitNotes(obs, tag),
