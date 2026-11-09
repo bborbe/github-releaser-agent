@@ -177,17 +177,31 @@ def main():
         if current is None or version_key(record["tag"]) > version_key(current["tag"]):
             seen[record["repo"]] = record
 
-    rows = sorted(
-        (row for row in seen.values() if row["opt_in"] in ("none", "unknown-legacy")),
-        key=lambda row: row["repo"],
-    )
+    # Every recorded cause must land in exactly one bucket, or the
+    # reconciliation below is a claim rather than a check. A cause added to
+    # the agent without being added here would silently vanish from the count.
+    buckets = {
+        "no_opt_in": [
+            row for row in seen.values() if row["opt_in"] in ("none", "unknown-legacy")
+        ],
+        "unrecorded": [row for row in seen.values() if row["opt_in"] == "unrecorded"],
+        "opted_in": [row for row in seen.values() if row["opt_in"] == "auto_build"],
+        "other_cause": [
+            row
+            for row in seen.values()
+            if row["opt_in"] in ("skipped", "empty_destinations", "no_config")
+        ],
+    }
+    bucketed = {row["repo"] for rows in buckets.values() for row in rows}
+    unclassified = sorted(set(seen) - bucketed)
+    if unclassified:
+        sys.exit(f"unclassified opt-in causes: {', '.join(unclassified)}")
+
+    rows = sorted(buckets["no_opt_in"], key=lambda row: row["repo"])
     with_review = {row["repo"] for row in rows}
-    unrecorded = sorted(
-        row["repo"] for row in seen.values() if row["opt_in"] == "unrecorded"
-    )
-    opted_in = sorted(
-        row["repo"] for row in seen.values() if row["opt_in"] == "auto_build"
-    )
+    unrecorded = sorted(row["repo"] for row in buckets["unrecorded"])
+    opted_in = sorted(row["repo"] for row in buckets["opted_in"])
+    other_cause = sorted(row["repo"] for row in buckets["other_cause"])
     unreviewed = sorted(dockerfile_repos - set(seen))
 
     if args.json:
@@ -200,6 +214,8 @@ def main():
                 "unrecorded_repos": unrecorded,
                 "opted_in": len(opted_in),
                 "opted_in_repos": opted_in,
+                "other_cause": len(other_cause),
+                "other_cause_repos": other_cause,
                 "without_review": len(unreviewed),
                 "without_review_repos": unreviewed,
             },
@@ -214,8 +230,14 @@ def main():
     print(f"Review recorded but before the image field: {len(unrecorded)}")
     print(f"No recorded review at all: {len(unreviewed)}")
     print(f"Recorded review says opted in: {len(opted_in)}")
-    total = len(with_review) + len(unrecorded) + len(unreviewed) + len(opted_in)
+    print(f"Recorded review carries another cause: {len(other_cause)}")
+    total = (
+        len(with_review) + len(unrecorded) + len(unreviewed)
+        + len(opted_in) + len(other_cause)
+    )
     print(f"Reconciles to: {total} (must equal {len(dockerfile_repos)})")
+    if total != len(dockerfile_repos):
+        sys.exit("reconciliation failed — a bucket is missing")
     print()
     for row in rows:
         print(f"  {row['repo']:<45} {row['tag']:<12} {row['opt_in']}  ({row['file']})")
