@@ -71,7 +71,7 @@ A confirmed release produces a GitHub Release object for its tag in the same run
 - [ ] **(c) An unreachable GitHub fails closed.** A spec named `CreateReleaseUnreachableFailsClosed` drives the fake client to return a transport error and asserts `ReleaseExists == false`, `CheckRelease` ∈ `FailedChecks`, `NextPhase == "human_review"`, and that `review.Notes` contains the literal `could not reach GitHub`. Evidence: file content plus a recorded red run; the name is absent today. This is the AC that stops "treat any non-success as fine" from passing.
 - [ ] **(d) A rejected call is distinguished from an unreachable one.** A spec named `CreateReleaseRejectedIsDistinctFromUnreachable` drives the fake client to return an HTTP-status error and asserts the notes contain `rejected the release` and **not** `could not reach GitHub`, with `ReleaseExists == false` and `NextPhase == "human_review"`. Evidence: file content plus a recorded red run; the name is absent today.
 - [ ] **(e) The client is idempotent at the HTTP layer.** A client-level spec named `CreateReleaseTreatsAlreadyExistsAsSuccess` serves a 422 whose body names `already_exists` and asserts `(false, nil)`; a second spec named `CreateReleaseReturnsWrappedErrorOnOtherNon2xx` serves a 500 and asserts a non-nil error. Evidence: file content; both names absent today; `make test` exits 0.
-- [ ] **(f) The check set gains the field and the failure name.** `ReviewChecks` carries `ReleaseExists bool` with json tag `release_exists`, and `CheckRelease = "Release"` is declared beside the other stable check names. Evidence: `grep -c 'ReleaseExists bool .json:"release_exists"' pkg/steps_ai_review.go` returns 1; `grep -c 'CheckRelease  *= "Release"' pkg/steps_ai_review.go` returns 1.
+- [ ] **(f) The check set gains the field and the failure name.** `ReviewChecks` carries `ReleaseExists bool` with json tag `release_exists`, and `CheckRelease = "Release"` is declared beside the other stable check names. Evidence: `grep -cE 'ReleaseExists[[:space:]]+bool[[:space:]]+`json:"release_exists"' pkg/steps_ai_review.go` returns 1; `grep -cE 'CheckRelease[[:space:]]*=[[:space:]]*"Release"' pkg/steps_ai_review.go` returns 1.
 - [ ] **(g) `CHANGELOG.md` gains a `## Unreleased` entry** naming the fix, created above the newest version header per `docs/dod.md`. Evidence: `grep -n '^## Unreleased' CHANGELOG.md` returns exactly one line and `grep -n '^## ' CHANGELOG.md | head -1` prints that same line number.
 - [ ] **(h) `make precommit` exits 0.** Evidence: exit code.
 
@@ -89,7 +89,7 @@ grep -c 'CreateReleaseAlreadyExistsIsSuccess' pkg/steps_ai_review_test.go       
 grep -c 'CreateReleaseUnreachableFailsClosed' pkg/steps_ai_review_test.go         # ≥1
 grep -c 'CreateReleaseRejectedIsDistinctFromUnreachable' pkg/steps_ai_review_test.go  # ≥1
 grep -c 'CreateReleaseTreatsAlreadyExistsAsSuccess' pkg/githubreview/client_test.go   # ≥1
-grep -c 'ReleaseExists bool `json:"release_exists"`' pkg/steps_ai_review.go       # 1
+grep -cE 'ReleaseExists[[:space:]]+bool[[:space:]]+`json:"release_exists"' pkg/steps_ai_review.go   # 1
 grep -n '^## Unreleased' CHANGELOG.md                                             # exactly one line
 grep -n '^## ' CHANGELOG.md | head -1                                             # the same line
 ```
