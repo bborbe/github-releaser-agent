@@ -1666,6 +1666,42 @@ var _ = Describe("AIReviewStep", func() {
 				Expect(fakeImageRegistry.ManifestExistsCallCount()).To(Equal(3))
 			})
 
+			It("reports a note, not an absence, when the wait is cancelled", func() {
+				// A cancelled wait means we stopped asking before the answer
+				// existed. It must never read as "no image was built".
+				fakeMaintainerConfig.FetchReturns([]byte(dockerHub), nil)
+				ctx, cancel := context.WithCancel(context.Background())
+				probes := 0
+				fakeImageRegistry.ManifestExistsCalls(
+					func(context.Context, string) (bool, error) {
+						probes++
+						if probes >= 2 {
+							cancel()
+						}
+						return false, nil
+					},
+				)
+				pkg.SetImageWaitForTest(step, time.Hour, time.Millisecond)
+				DeferCleanup(cancel)
+				fakeOps.LsRemoteReturns("abc1234e3cca37862f4e612a7b14c4e00af6b935", nil)
+				DeferCleanup(func() { _ = os.RemoveAll(tmpDir) })
+
+				md, err := agentlib.ParseMarkdown(
+					context.Background(),
+					taskWithResultFull("abc1234", "v1.0.0", "released", tmpDir),
+				)
+				Expect(err).NotTo(HaveOccurred())
+				result, err := step.Run(ctx, md)
+				Expect(err).NotTo(HaveOccurred())
+
+				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+				review := extractReview(md)
+				Expect(review.Checks.ImageExpected).To(BeTrue())
+				Expect(review.Checks.ImageExists).To(BeFalse())
+				Expect(review.FailedChecks).NotTo(ContainElement(pkg.CheckImage))
+				Expect(review.Notes).To(ContainSubstring("cancelled"))
+			})
+
 			It("reports the last transport error when the wait expires unreachable", func() {
 				// An unreachable registry must not read as an absence: the
 				// release closes with a note, and the check does not fail.

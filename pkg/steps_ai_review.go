@@ -65,8 +65,13 @@ const (
 // written at 09:17Z and the build Job was created at 09:21Z. The wait exists
 // to tell "still building" apart from "no image will ever appear"; it does not
 // soften the verdict, it only defers it.
+// The budget must cover the WORST observed case, not the average: the watcher
+// has been measured dispatching the build ~4 minutes after the release task is
+// written, and the build itself runs 6-9 minutes, so a healthy release can take
+// 13 minutes to produce a manifest. 20 minutes leaves margin; anything shorter
+// reintroduces the false absence this wait exists to remove.
 const (
-	defaultImageWaitBudget   = 10 * time.Minute
+	defaultImageWaitBudget   = 20 * time.Minute
 	defaultImagePollInterval = 20 * time.Second
 )
 
@@ -598,7 +603,13 @@ func (s *aiReviewStep) waitForManifest(
 		}
 		select {
 		case <-ctx.Done():
-			return false, lastErr
+			// A cancelled wait is NOT an absence: we stopped asking before the
+			// answer existed. Returning a non-nil error routes the caller to the
+			// note-and-close path, so a deadline-exceeded release never reads as
+			// "no image was built".
+			return false, errors.Wrapf(
+				ctx, ctx.Err(), "image check cancelled while waiting for %s", imageRef,
+			)
 		case <-time.After(s.imagePollInterval):
 		}
 	}
