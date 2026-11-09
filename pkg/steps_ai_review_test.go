@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	agentlib "github.com/bborbe/agent"
 	claudelib "github.com/bborbe/agent/claude"
@@ -76,6 +77,10 @@ var _ = Describe("AIReviewStep", func() {
 			fakeMaintainerConfig,
 			token,
 		)
+		// The image check waits for an asynchronous build in production.
+		// Tests must not sleep for that budget: shrink it to a single probe
+		// so an absent image still resolves immediately.
+		pkg.SetImageWaitForTest(step, 0, 0)
 	})
 
 	// taskWithResult builds a task markdown with ## Result section.
@@ -1639,6 +1644,44 @@ var _ = Describe("AIReviewStep", func() {
 				Expect(fakeImageRegistry.ManifestExistsCallCount()).To(Equal(1))
 				_, probedRef := fakeImageRegistry.ManifestExistsArgsForCall(0)
 				Expect(probedRef).To(Equal("docker.io/bborbe/example:v1.0.0"))
+			})
+
+			It("waits for a late build instead of reporting a false absence", func() {
+				// The in-cluster build is asynchronous: the first probes can
+				// answer "not yet" on a release whose image lands seconds
+				// later. Only a probe that never succeeds is an absence.
+				fakeMaintainerConfig.FetchReturns([]byte(dockerHub), nil)
+				fakeImageRegistry.ManifestExistsReturnsOnCall(0, false, nil)
+				fakeImageRegistry.ManifestExistsReturnsOnCall(1, false, nil)
+				fakeImageRegistry.ManifestExistsReturnsOnCall(2, true, nil)
+				pkg.SetImageWaitForTest(step, 200*time.Millisecond, time.Millisecond)
+
+				result, md := runConfirmedRelease()
+
+				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+				review := extractReview(md)
+				Expect(review.Checks.ImageExpected).To(BeTrue())
+				Expect(review.Checks.ImageExists).To(BeTrue())
+				Expect(review.FailedChecks).NotTo(ContainElement(pkg.CheckImage))
+				Expect(fakeImageRegistry.ManifestExistsCallCount()).To(Equal(3))
+			})
+
+			It("reports the last transport error when the wait expires unreachable", func() {
+				// An unreachable registry must not read as an absence: the
+				// release closes with a note, and the check does not fail.
+				fakeMaintainerConfig.FetchReturns([]byte(dockerHub), nil)
+				fakeImageRegistry.ManifestExistsReturns(false, errors.New("dial tcp: refused"))
+				pkg.SetImageWaitForTest(step, 20*time.Millisecond, time.Millisecond)
+
+				result, md := runConfirmedRelease()
+
+				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+				review := extractReview(md)
+				Expect(review.Checks.ImageExpected).To(BeTrue())
+				Expect(review.Checks.ImageExists).To(BeFalse())
+				Expect(review.FailedChecks).NotTo(ContainElement(pkg.CheckImage))
+				Expect(review.Notes).To(ContainSubstring("dial tcp: refused"))
+				Expect(fakeImageRegistry.ManifestExistsCallCount()).To(BeNumerically(">", 1))
 			})
 
 			It("fails the check when the image is genuinely absent", func() {

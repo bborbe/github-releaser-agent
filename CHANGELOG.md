@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- fix: the post-release image check waits for the in-cluster build instead of probing once. The build is asynchronous — the watcher dispatches the Job on its own poll cycle and the build takes ~6-9 minutes, while this step runs seconds after the tag push — so a single probe reported `image_exists: false` on healthy releases and, on the genuine-absence path, parked them at `human_review`. Measured on `bborbe/agent-task-executor` v0.57.5: release task written at 09:17Z, build Job created at 09:21Z. The wait is bounded (10 min, 20 s interval); a probe that never succeeds is still a failure, and an unreachable registry still closes the release with a note rather than a false absence
+
 ## v0.9.0
 
 - feat: opt into `dockerBuild` (`autoBuild: true`, destination `dockerhub`) so a release tag builds and publishes `docker.io/bborbe/github-releaser-agent:<tag>` in-cluster. The template was fixed in v0.8.2, but without this block the build gate reads `autoBuild` as absent and dispatches nothing — which is why `v0.7.0`, `v0.8.0` and `v0.8.2` all shipped with no image
