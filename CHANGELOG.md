@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- fix: a confirmed release now creates the GitHub Release object for its tag in the same run, with the tag as the only input. The `## Review` block records `release_exists`, and an unreachable or rejecting GitHub fails the `Release` check and parks the task at `human_review` instead of closing it. An already-existing release counts as present, so re-running a released task does not fail; a CHANGELOG section that cannot be read is created with an empty body plus a note.
+
 ## v0.9.1
 
 - fix: the post-release image check waits for the in-cluster build instead of probing once. The build is asynchronous — the watcher dispatches the Job on its own poll cycle and the build takes ~6-9 minutes, while this step runs seconds after the tag push — so a single probe reported `image_exists: false` on healthy releases and, on the genuine-absence path, parked them at `human_review`. Measured on `bborbe/agent-task-executor` v0.57.5: release task written at 09:17Z, build Job created at 09:21Z. The wait is bounded at 20 min (20 s interval) because the worst observed case is ~4 min of watcher dispatch delay plus a 6-9 min build; a probe that never succeeds is still a failure, and both an unreachable registry and a cancelled wait close the release with a note rather than a false absence

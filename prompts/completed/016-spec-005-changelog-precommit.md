@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [005-create-github-release-object]
+summary: Added a single `fix:` entry under a new `## Unreleased` section (below the preamble, above the newest `## v0.9.1` header) covering the Release object, `release_exists`, fail-closed `human_review`, and already-exists-as-success; `make precommit` exited 0.
+execution_id: be68957f-2d9c-5d8a-966a-0c54fe41d8bb-exec-016-spec-005-changelog-precommit
+dark-factory-version: dev
 created: "2026-11-09T17:38:03Z"
 queued: "2026-11-09T17:58:03Z"
+started: "2026-11-09T18:14:15Z"
+completed: "2026-11-09T18:16:34Z"
 branch: dark-factory/create-github-release-object
 ---
 
