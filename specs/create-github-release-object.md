@@ -44,13 +44,22 @@ git -C ~/Documents/workspaces/go-skeleton tag --sort=-v:refname | head -1   # v0
 kubectlnukeprod -n build logs job/build-go-skeleton-v0-8-3-20261108-175350-jxig --tail=5
 #   → pushing manifest for docker.prod.nuke.benjamin-borbe.de:443/bborbe/go-skeleton:v0.8.3@sha256:1ee9f467…
 
-# The fleet-wide gap, inlined so it reproduces off this host:
-for r in $(grep -rl 'task_type: github-release' ~/Documents/Obsidian/private-agent/tasks \
-           | xargs grep -l '^status: completed' \
-           | xargs awk '/^repo:/{print $2}' | sort -u); do
-  n=$(gh api "repos/$r/releases?per_page=1" --jq 'length' 2>/dev/null || echo ERR)
-  echo "$r $n"
-done | awk '$2=="0"{bad++} {n++} END{print n" repos, "bad" with no release"}'
+# The fleet-wide gap, inlined so it reproduces off this host.
+# Task filenames contain spaces ("Release bborbe-x 7a59d90.md"), so read them
+# line-wise — an `xargs` pipeline splits on the space and greps a file per word.
+D=~/Documents/Obsidian/private-agent/tasks
+grep -rl --include='*.md' -E '^task_type: github-release' "$D" \
+| while IFS= read -r f; do
+    grep -qE '^status: completed' "$f" || continue
+    js=$(awk '/^job_started_at:/{print $2; exit}' "$f" | tr -d '"')
+    [ -n "$js" ] && [[ ! "$js" < "2026-11-01" ]] || continue
+    awk '/^repo:/{print $2; exit}' "$f" | tr -d '"'
+  done | sort -u \
+| while IFS= read -r r; do
+    printf '%s %s\n' "$r" \
+      "$(gh api "repos/$r/releases?per_page=1" --jq 'length' 2>/dev/null || echo ERR)"
+  done \
+| awk '$2=="0"{bad++} {n++} END{print n" repos, "bad" with no release"}'
 #   → 99 repos, 95 with no release   (2026-11-09)
 ```
 
