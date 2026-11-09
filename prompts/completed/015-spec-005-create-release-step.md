@@ -1,8 +1,13 @@
 ---
-status: approved
+status: completed
 spec: [005-create-github-release-object]
+summary: Added GitHub Release creation to the confirmed-release path of the AI review step with a release_exists check, fail-closed NeedsInput/human_review routing, distinct unreachable-vs-rejected notes, and six new specs; make precommit exits 0 (CHANGELOG entry deferred to prompt 3 per prompt constraint).
+execution_id: be68957f-2d9c-5d8a-966a-0c54fe41d8bb-exec-015-spec-005-create-release-step
+dark-factory-version: dev
 created: "2026-11-09T17:38:03Z"
 queued: "2026-11-09T17:55:37Z"
+started: "2026-11-09T18:07:10Z"
+completed: "2026-11-09T18:14:14Z"
 branch: dark-factory/create-github-release-object
 ---
 

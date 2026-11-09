@@ -55,6 +55,7 @@ const (
 	CheckUnexpectedFileChange = "UnexpectedFileChange"
 	CheckPush                 = "Push"
 	CheckImage                = "Image"
+	CheckRelease              = "Release"
 )
 
 // Image-check wait defaults. The in-cluster build is asynchronous: the
@@ -88,8 +89,9 @@ type FaithfulnessVerdict struct {
 }
 
 // ReviewChecks holds the boolean verification results: the three original
-// structural checks, the ai-review-side gates, and the image-existence
-// fields evaluated only after the pushed tag is confirmed on the remote.
+// structural checks, the ai-review-side gates, and the image-existence and
+// release-existence fields evaluated only after the pushed tag is confirmed
+// on the remote.
 type ReviewChecks struct {
 	TagExists                bool `json:"tag_exists"`
 	TagAtExpectedSHA         bool `json:"tag_at_expected_sha"`
@@ -117,6 +119,13 @@ type ReviewChecks struct {
 	// false, and false when the probe could not determine existence
 	// (an unreachable registry is not an absence).
 	ImageExists bool `json:"image_exists"`
+
+	// ReleaseExists is true when the GitHub Release object for the released
+	// tag is present after the pushed tag is confirmed. It is true both when
+	// this run created the release and when GitHub reported that it already
+	// existed. False when the call failed or when the short-circuit path
+	// (a failed outcome) never created one.
+	ReleaseExists bool `json:"release_exists"`
 }
 
 // ReviewOutput is the typed contract for the `## Review` JSON section the
@@ -154,7 +163,7 @@ type ReviewOutput struct {
 	// FailedChecks names the semantic / local checks that did not pass.
 	// Stable strings — referenced by spec AC 15 assertions.
 	// One or more of: CheckFaithfulness, CheckUnexpectedFileChange,
-	// CheckPush, CheckImage.
+	// CheckPush, CheckImage, CheckRelease.
 	FailedChecks []string `json:"failed_checks,omitempty"`
 }
 
@@ -464,14 +473,8 @@ func (s *aiReviewStep) finishApproved(
 	// reconcilePostPush reported the pushed tag confirmed. A skipped
 	// consult is not a confirmation, so the check is not run at all.
 	if confirmed {
-		terminal, checkErr := s.applyImageCheck(
-			ctx,
-			md,
-			result,
-			owner,
-			name,
-			&output,
-			workdirShouldCleanup,
+		terminal, checkErr := s.applyPostPushChecks(
+			ctx, md, result, owner, name, &output, workdirShouldCleanup,
 		)
 		if checkErr != nil {
 			return nil, checkErr
@@ -490,6 +493,154 @@ func (s *aiReviewStep) finishApproved(
 		Status:    agentlib.AgentStatusDone,
 		NextPhase: "done",
 	}, nil
+}
+
+// applyReleaseCreation creates the GitHub Release object for the released
+// tag. It is called only when the pushed tag is confirmed on the remote, so
+// the release always points at a tag that exists.
+//
+// The tag is the only input: tag_name and name are result.LocalTag, and the
+// body is the CHANGELOG section already written for that tag. A body that
+// cannot be read does not skip the release — it is created with an empty body
+// and a note records why.
+//
+// An already-existing release is success: CreateRelease returns (false, nil)
+// for GitHub's already_exists response, which means the release is present.
+//
+// The check fails closed: any error routes to human_review with
+// AgentStatusNeedsInput (never AgentStatusFailed, which would re-run the push
+// and the faithfulness LLM call). The note distinguishes a transport failure
+// ("could not reach GitHub") from an HTTP rejection ("rejected the release").
+//
+// The returned *agentlib.Result is non-nil only on the fail-closed terminal
+// path; the caller then skips the Done transition.
+func (s *aiReviewStep) applyReleaseCreation(
+	ctx context.Context,
+	md *agentlib.Markdown,
+	result *ResultOutput,
+	owner, name string,
+	output *ReviewOutput,
+	workdirShouldCleanup *bool,
+) (*agentlib.Result, error) {
+	output.Checks.ReleaseExists = false
+	body := s.releaseBody(ctx, result, output)
+
+	created, err := s.client.CreateRelease(
+		ctx, owner, name, result.LocalTag, result.LocalTag, body,
+	)
+	if err != nil {
+		return s.failReleaseCreation(ctx, md, output, err, workdirShouldCleanup)
+	}
+
+	output.Checks.ReleaseExists = true
+	taskID, _ := md.Frontmatter.String("task_identifier")
+	glog.V(2).Infof(
+		"ai_review release creation: task_id=%s tag=%s created=%t",
+		taskID,
+		result.LocalTag,
+		created,
+	)
+	return nil, nil
+}
+
+// releaseBody reads the CHANGELOG section already written for the released
+// tag. A body that cannot be read is not a reason to skip the release: it
+// returns "" and appends a note naming the reason. Never returns an error.
+func (s *aiReviewStep) releaseBody(
+	ctx context.Context,
+	result *ResultOutput,
+	output *ReviewOutput,
+) string {
+	if result.Workdir == "" {
+		output.Notes = appendReviewNote(
+			output.Notes,
+			"release body could not be read: workdir is empty",
+		)
+		return ""
+	}
+	changelogPath := filepath.Join(result.Workdir, changelogFileName)
+	content, err := os.ReadFile(
+		changelogPath,
+	) // #nosec G304 -- workdir is os.TempDir-rooted; filename is constant
+	if err != nil {
+		output.Notes = appendReviewNote(
+			output.Notes,
+			"release body could not be read: "+git.RedactToken(err.Error()),
+		)
+		return ""
+	}
+	extracted, err := changelog.ExtractSectionBody(ctx, content, result.LocalTag)
+	if err != nil {
+		output.Notes = appendReviewNote(
+			output.Notes,
+			"release body could not be read: "+git.RedactToken(err.Error()),
+		)
+		return ""
+	}
+	return extracted
+}
+
+// failReleaseCreation is the fail-closed terminal path for a failed release
+// creation. It records the failed check, distinguishes a transport failure
+// from an HTTP rejection in the note, writes ## Review, and returns
+// NeedsInput/human_review. AgentStatusFailed is deliberately not used: a
+// missing release does not fix itself on retry, and Failed re-runs the push
+// and the faithfulness LLM call.
+func (s *aiReviewStep) failReleaseCreation(
+	ctx context.Context,
+	md *agentlib.Markdown,
+	output *ReviewOutput,
+	createErr error,
+	workdirShouldCleanup *bool,
+) (*agentlib.Result, error) {
+	output.Checks.ReleaseExists = false
+	output.Overall = OverallFail
+	output.Approved = false
+	if !slices.Contains(output.FailedChecks, CheckRelease) {
+		output.FailedChecks = append(output.FailedChecks, CheckRelease)
+	}
+	output.Notes = appendReviewNote(output.Notes, releaseFailureNote(createErr))
+	section, err := agentlib.MarshalSectionTyped(ctx, "## Review", *output)
+	if err != nil {
+		return nil, errors.Wrapf(ctx, err, "ai_review: marshal ## Review section")
+	}
+	md.ReplaceSection(section)
+	*workdirShouldCleanup = true
+	return &agentlib.Result{
+		Status:    agentlib.AgentStatusNeedsInput,
+		NextPhase: string(domain.TaskPhaseHumanReview),
+		Message:   output.Notes,
+	}, nil
+}
+
+// releaseFailureNote words the failure by class so the operator can tell an
+// unreachable GitHub from a rejected call. Both error strings are redacted.
+func releaseFailureNote(err error) string {
+	if stderrors.Is(err, githubreview.ErrReleaseUnreachable) {
+		return "release creation could not reach GitHub: " + git.RedactToken(err.Error())
+	}
+	return "GitHub rejected the release: " + git.RedactToken(err.Error())
+}
+
+// applyPostPushChecks runs the post-push checks in order: release creation
+// first, then the image check. The release is created before the image check
+// so a missing release is reported even when the image result would mask it.
+// It returns a non-nil terminal result when either check fails closed.
+func (s *aiReviewStep) applyPostPushChecks(
+	ctx context.Context,
+	md *agentlib.Markdown,
+	result *ResultOutput,
+	owner, name string,
+	output *ReviewOutput,
+	workdirShouldCleanup *bool,
+) (*agentlib.Result, error) {
+	terminal, err := s.applyReleaseCreation(
+		ctx, md, result, owner, name, output, workdirShouldCleanup,
+	)
+	if err != nil || terminal != nil {
+		return terminal, err
+	}
+	return s.applyImageCheck(ctx, md, result, owner, name, output, workdirShouldCleanup)
 }
 
 // applyImageCheck evaluates the post-push image-existence check. It is
