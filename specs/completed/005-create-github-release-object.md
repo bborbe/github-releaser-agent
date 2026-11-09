@@ -1,8 +1,10 @@
 ---
-status: prompted
+status: completed
 approved: "2026-11-09T16:44:40Z"
 generating: "2026-11-09T17:35:04Z"
 prompted: "2026-11-09T17:45:10Z"
+verifying: "2026-11-09T18:16:34Z"
+completed: "2026-11-09T18:16:42Z"
 branch: dark-factory/create-github-release-object
 ---
 
