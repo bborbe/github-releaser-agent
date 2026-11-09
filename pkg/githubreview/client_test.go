@@ -683,4 +683,135 @@ var _ = Describe("httpClient", func() {
 			Expect(err.Error()).To(ContainSubstring("http"))
 		})
 	})
+
+	Describe("CreateRelease", func() {
+		It("CreateReleaseTreatsAlreadyExistsAsSuccess", func() {
+			server := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusUnprocessableEntity)
+					_, _ = w.Write([]byte(
+						`{"message":"Validation Failed","errors":[{"resource":"Release",` +
+							`"code":"already_exists","field":"tag_name"}]}`,
+					))
+				}),
+			)
+			defer server.Close()
+
+			client := githubreview.NewHTTPClientForTest("test-token", server.URL)
+			created, err := client.CreateRelease(
+				ctx, "bborbe", "example", "v1.0.0", "v1.0.0", "notes",
+			)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(created).To(BeFalse())
+		})
+
+		It("CreateReleaseReturnsWrappedErrorOnOtherNon2xx", func() {
+			server := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusInternalServerError)
+				}),
+			)
+			defer server.Close()
+
+			client := githubreview.NewHTTPClientForTest("test-token", server.URL)
+			created, err := client.CreateRelease(
+				ctx, "bborbe", "example", "v1.0.0", "v1.0.0", "notes",
+			)
+
+			Expect(err).To(HaveOccurred())
+			Expect(created).To(BeFalse())
+			Expect(errors.Is(err, githubreview.ErrReleaseRejected)).To(BeTrue())
+		})
+
+		It("CreateReleaseCreatesOn201", func() {
+			var gotMethod, gotPath, gotAuth, gotAccept, gotVersion, gotContentType string
+			var got createReleaseRequestForTest
+			server := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					gotMethod = r.Method
+					gotPath = r.URL.Path
+					gotAuth = r.Header.Get("Authorization")
+					gotAccept = r.Header.Get("Accept")
+					gotVersion = r.Header.Get("X-GitHub-Api-Version")
+					gotContentType = r.Header.Get("Content-Type")
+					_ = json.NewDecoder(r.Body).Decode(&got)
+					w.WriteHeader(http.StatusCreated)
+				}),
+			)
+			defer server.Close()
+
+			client := githubreview.NewHTTPClientForTest("my-secret-token", server.URL)
+			created, err := client.CreateRelease(
+				ctx, "bborbe", "example", "v1.2.3", "v1.2.3", "release notes",
+			)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(created).To(BeTrue())
+			Expect(gotMethod).To(Equal(http.MethodPost))
+			Expect(gotPath).To(Equal("/repos/bborbe/example/releases"))
+			Expect(got.TagName).To(Equal("v1.2.3"))
+			Expect(got.Name).To(Equal("v1.2.3"))
+			Expect(got.Body).To(Equal("release notes"))
+			Expect(gotAuth).To(Equal("Bearer my-secret-token"))
+			Expect(gotAccept).To(Equal("application/vnd.github+json"))
+			Expect(gotVersion).To(Equal("2022-11-28"))
+			Expect(gotContentType).To(Equal("application/json"))
+		})
+
+		It("CreateReleaseUnreachableWrapsSentinel", func() {
+			server := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}),
+			)
+			server.Close()
+
+			client := githubreview.NewHTTPClientForTest("test-token", server.URL)
+			created, err := client.CreateRelease(
+				ctx, "bborbe", "example", "v1.0.0", "v1.0.0", "notes",
+			)
+
+			Expect(err).To(HaveOccurred())
+			Expect(created).To(BeFalse())
+			Expect(errors.Is(err, githubreview.ErrReleaseUnreachable)).To(BeTrue())
+		})
+
+		It("CreateReleaseRejectsEmptyOwnerRepoTag", func() {
+			client := githubreview.NewHTTPClientForTest("test-token", "https://api.github.com")
+			_, err := client.CreateRelease(ctx, "", "example", "v1.0.0", "v1.0.0", "notes")
+
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("CreateRelease"))
+			Expect(err.Error()).To(ContainSubstring("owner/repo/tag must be non-empty"))
+		})
+
+		It("CreateReleaseRejectionDoesNotLeakToken", func() {
+			// #nosec G101 -- test token, not a real credential
+			token := "ghp_verylongtokenthatweshouldnotsee1234567890abcdef"
+			server := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusInternalServerError)
+				}),
+			)
+			defer server.Close()
+
+			client := githubreview.NewHTTPClientForTest(token, server.URL)
+			_, err := client.CreateRelease(
+				ctx, "bborbe", "example", "v1.0.0", "v1.0.0", "notes",
+			)
+
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).ToNot(ContainSubstring(token))
+			Expect(err.Error()).ToNot(ContainSubstring("ghp_"))
+		})
+	})
 })
+
+// createReleaseRequestForTest mirrors the private request struct so the test
+// can decode and assert on the JSON field names.
+type createReleaseRequestForTest struct {
+	TagName string `json:"tag_name"`
+	Name    string `json:"name"`
+	Body    string `json:"body"`
+}

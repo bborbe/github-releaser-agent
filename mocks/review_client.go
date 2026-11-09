@@ -12,6 +12,24 @@ import (
 )
 
 type ReviewClient struct {
+	CreateReleaseStub        func(context.Context, string, string, string, string, string) (bool, error)
+	createReleaseMutex       sync.RWMutex
+	createReleaseArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 string
+		arg5 string
+		arg6 string
+	}
+	createReleaseReturns struct {
+		result1 bool
+		result2 error
+	}
+	createReleaseReturnsOnCall map[int]struct {
+		result1 bool
+		result2 error
+	}
 	FetchChangelogStub        func(context.Context, string, string) ([]byte, error)
 	fetchChangelogMutex       sync.RWMutex
 	fetchChangelogArgsForCall []struct {
@@ -61,6 +79,75 @@ type ReviewClient struct {
 	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
+}
+
+func (fake *ReviewClient) CreateRelease(arg1 context.Context, arg2 string, arg3 string, arg4 string, arg5 string, arg6 string) (bool, error) {
+	fake.createReleaseMutex.Lock()
+	ret, specificReturn := fake.createReleaseReturnsOnCall[len(fake.createReleaseArgsForCall)]
+	fake.createReleaseArgsForCall = append(fake.createReleaseArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 string
+		arg5 string
+		arg6 string
+	}{arg1, arg2, arg3, arg4, arg5, arg6})
+	stub := fake.CreateReleaseStub
+	fakeReturns := fake.createReleaseReturns
+	fake.recordInvocation("CreateRelease", []interface{}{arg1, arg2, arg3, arg4, arg5, arg6})
+	fake.createReleaseMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3, arg4, arg5, arg6)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2
+	}
+	return fakeReturns.result1, fakeReturns.result2
+}
+
+func (fake *ReviewClient) CreateReleaseCallCount() int {
+	fake.createReleaseMutex.RLock()
+	defer fake.createReleaseMutex.RUnlock()
+	return len(fake.createReleaseArgsForCall)
+}
+
+func (fake *ReviewClient) CreateReleaseCalls(stub func(context.Context, string, string, string, string, string) (bool, error)) {
+	fake.createReleaseMutex.Lock()
+	defer fake.createReleaseMutex.Unlock()
+	fake.CreateReleaseStub = stub
+}
+
+func (fake *ReviewClient) CreateReleaseArgsForCall(i int) (context.Context, string, string, string, string, string) {
+	fake.createReleaseMutex.RLock()
+	defer fake.createReleaseMutex.RUnlock()
+	argsForCall := fake.createReleaseArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4, argsForCall.arg5, argsForCall.arg6
+}
+
+func (fake *ReviewClient) CreateReleaseReturns(result1 bool, result2 error) {
+	fake.createReleaseMutex.Lock()
+	defer fake.createReleaseMutex.Unlock()
+	fake.CreateReleaseStub = nil
+	fake.createReleaseReturns = struct {
+		result1 bool
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *ReviewClient) CreateReleaseReturnsOnCall(i int, result1 bool, result2 error) {
+	fake.createReleaseMutex.Lock()
+	defer fake.createReleaseMutex.Unlock()
+	fake.CreateReleaseStub = nil
+	if fake.createReleaseReturnsOnCall == nil {
+		fake.createReleaseReturnsOnCall = make(map[int]struct {
+			result1 bool
+			result2 error
+		})
+	}
+	fake.createReleaseReturnsOnCall[i] = struct {
+		result1 bool
+		result2 error
+	}{result1, result2}
 }
 
 func (fake *ReviewClient) FetchChangelog(arg1 context.Context, arg2 string, arg3 string) ([]byte, error) {
