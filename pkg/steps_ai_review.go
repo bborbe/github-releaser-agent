@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	agentlib "github.com/bborbe/agent"
 	claudelib "github.com/bborbe/agent/claude"
@@ -54,6 +55,24 @@ const (
 	CheckUnexpectedFileChange = "UnexpectedFileChange"
 	CheckPush                 = "Push"
 	CheckImage                = "Image"
+)
+
+// Image-check wait defaults. The in-cluster build is asynchronous: the
+// watcher dispatches the Job on its own poll cycle and the build itself takes
+// roughly 6-9 minutes, while this step runs seconds after the tag push. A
+// single probe therefore reports a FALSE absence on a healthy release —
+// measured on bborbe/agent-task-executor v0.57.5, where the release task was
+// written at 09:17Z and the build Job was created at 09:21Z. The wait exists
+// to tell "still building" apart from "no image will ever appear"; it does not
+// soften the verdict, it only defers it.
+// The budget must cover the WORST observed case, not the average: the watcher
+// has been measured dispatching the build ~4 minutes after the release task is
+// written, and the build itself runs 6-9 minutes, so a healthy release can take
+// 13 minutes to produce a manifest. 20 minutes leaves margin; anything shorter
+// reintroduces the false absence this wait exists to remove.
+const (
+	defaultImageWaitBudget   = 20 * time.Minute
+	defaultImagePollInterval = 20 * time.Second
 )
 
 // FaithfulnessVerdict captures the semantic comparison of one entry from
@@ -153,12 +172,14 @@ func NewAIReviewStep(
 	ghToken string,
 ) agentlib.Step {
 	return &aiReviewStep{
-		client:           client,
-		runner:           runner,
-		ops:              ops,
-		imageRegistry:    imageRegistry,
-		maintainerConfig: maintainerConfig,
-		ghToken:          ghToken,
+		client:            client,
+		runner:            runner,
+		ops:               ops,
+		imageRegistry:     imageRegistry,
+		maintainerConfig:  maintainerConfig,
+		ghToken:           ghToken,
+		imageWaitBudget:   defaultImageWaitBudget,
+		imagePollInterval: defaultImagePollInterval,
 	}
 }
 
@@ -175,6 +196,11 @@ type aiReviewStep struct {
 	imageRegistry    imageregistry.Client
 	maintainerConfig maintainerconfig.Fetcher
 	ghToken          string
+	// imageWaitBudget and imagePollInterval bound the post-push image probe.
+	// They are fields rather than constants so tests can drive the wait
+	// without sleeping for the production budget.
+	imageWaitBudget   time.Duration
+	imagePollInterval time.Duration
 }
 
 // Name implements agentlib.Step.
@@ -481,8 +507,9 @@ func (s *aiReviewStep) finishApproved(
 //   - fetch / parse / registry error → expected true, exists false, a note
 //     naming the error and the probed reference; the release still closes.
 //   - autoBuild true with at least one destination → probe the primary
-//     destination. Present → exists true. Absent → a failed check routed to
-//     human_review.
+//     destination, waiting up to imageWaitBudget for an asynchronous build to
+//     land. Present → exists true. Still absent at the deadline → a failed
+//     check routed to human_review.
 //
 // The returned *agentlib.Result is non-nil only on the genuinely-absent
 // terminal path; the caller then skips the Done transition.
@@ -505,7 +532,7 @@ func (s *aiReviewStep) applyImageCheck(
 	}
 
 	imageRef := exp.imageHost + "/" + owner + "/" + name + ":" + result.LocalTag
-	exists, err := s.imageRegistry.ManifestExists(ctx, imageRef)
+	exists, err := s.waitForManifest(ctx, imageRef)
 	if err != nil {
 		output.Notes = appendReviewNote(
 			output.Notes,
@@ -539,6 +566,53 @@ func (s *aiReviewStep) applyImageCheck(
 		NextPhase: string(domain.TaskPhaseHumanReview),
 		Message:   output.Notes,
 	}, nil
+}
+
+// waitForManifest polls the registry until the manifest appears, the wait
+// budget expires, or the context is cancelled.
+//
+// It returns (true, nil) as soon as the manifest is served. Otherwise it
+// returns false plus the LAST error observed — nil when every probe answered
+// cleanly and simply found nothing, which is the genuine-absence case, and
+// non-nil when the registry could not be asked, which is an infrastructure
+// fact the caller reports as a note rather than a failed release.
+//
+// The loop exists because the build is asynchronous. A single probe is what
+// reported `image_exists: false` on a healthy bborbe/agent-task-executor
+// v0.57.5 release whose build Job had not even been created yet.
+func (s *aiReviewStep) waitForManifest(
+	ctx context.Context,
+	imageRef string,
+) (bool, error) {
+	deadline := time.Now().Add(s.imageWaitBudget)
+	var lastErr error
+	for {
+		exists, err := s.imageRegistry.ManifestExists(ctx, imageRef)
+		if err != nil {
+			lastErr = err
+		} else {
+			// A clean answer clears any earlier transport error: the
+			// registry is reachable and this tag is genuinely absent.
+			lastErr = nil
+			if exists {
+				return true, nil
+			}
+		}
+		if !time.Now().Before(deadline) {
+			return false, lastErr
+		}
+		select {
+		case <-ctx.Done():
+			// A cancelled wait is NOT an absence: we stopped asking before the
+			// answer existed. Returning a non-nil error routes the caller to the
+			// note-and-close path, so a deadline-exceeded release never reads as
+			// "no image was built".
+			return false, errors.Wrapf(
+				ctx, ctx.Err(), "image check cancelled while waiting for %s", imageRef,
+			)
+		case <-time.After(s.imagePollInterval):
+		}
+	}
 }
 
 // imageExpectation is the outcome of resolving the dockerBuild opt-in.

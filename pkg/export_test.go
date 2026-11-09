@@ -4,6 +4,21 @@
 
 package pkg
 
+import "time"
+
+// SetImageWaitForTest shrinks the image-check wait budget and poll interval on
+// an *aiReviewStep, so the external _test package can drive the retry loop
+// without sleeping for the production ten-minute budget. A non-aiReviewStep is
+// left untouched, which keeps the helper safe to call on any agentlib.Step.
+func SetImageWaitForTest(step any, budget, interval time.Duration) {
+	s, ok := step.(*aiReviewStep)
+	if !ok {
+		return
+	}
+	s.imageWaitBudget = budget
+	s.imagePollInterval = interval
+}
+
 // ParseOwnerRepoForTest exposes the unexported parseOwnerRepo helper so
 // the external _test package can exercise it directly.
 var ParseOwnerRepoForTest = parseOwnerRepo
