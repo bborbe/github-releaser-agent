@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- fix: remove the two build-job template tokens the release-to-image renderer does not know — `__NAMESPACE__` and `__DOCKER_REGISTRY__`. The renderer aborts on any surviving `__TOKEN__` (`ErrUnrenderedToken`, logged `reason=unrendered_token`), so every tag on this repo dispatched and then skipped, and `v0.7.0`/`v0.8.0` shipped with no image. The namespace is forced by the renderer (`build` when the manifest names none), and `DOCKER_REGISTRY` is hardcoded `docker.io` on the same line in `git-rest`, whose template the renderer accepts
+
 ## v0.8.1
 
 - chore: restate the do-not-merge contract in the gate workflow
