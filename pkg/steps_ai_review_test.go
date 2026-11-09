@@ -20,6 +20,7 @@ import (
 	"github.com/bborbe/cqrs/base"
 	"github.com/bborbe/github-releaser-agent/mocks"
 	pkg "github.com/bborbe/github-releaser-agent/pkg"
+	"github.com/bborbe/github-releaser-agent/pkg/changelog"
 	"github.com/bborbe/github-releaser-agent/pkg/factory"
 	"github.com/bborbe/github-releaser-agent/pkg/git"
 	"github.com/bborbe/github-releaser-agent/pkg/githubreview"
@@ -1732,6 +1733,7 @@ var _ = Describe("AIReviewStep", func() {
 				review := extractReview(md)
 				Expect(review.Checks.ImageExpected).To(BeTrue())
 				Expect(review.Checks.ImageExists).To(BeFalse())
+				Expect(review.Checks.ReleaseExists).To(BeTrue())
 				Expect(review.Approved).To(BeFalse())
 				Expect(review.Overall).To(Equal(pkg.OverallFail))
 				Expect(review.FailedChecks).To(ContainElement(pkg.CheckImage))
@@ -1772,6 +1774,134 @@ var _ = Describe("AIReviewStep", func() {
 				Expect(result.Status).To(Equal(agentlib.AgentStatusFailed))
 				Expect(fakeMaintainerConfig.FetchCallCount()).To(Equal(0))
 				Expect(fakeImageRegistry.ManifestExistsCallCount()).To(Equal(0))
+			})
+		})
+
+		Context("post-push release creation (spec 005)", func() {
+			runConfirmedRelease := func(tag string) (*agentlib.Result, *agentlib.Markdown) {
+				DeferCleanup(func() { _ = os.RemoveAll(tmpDir) })
+				fakeOps.LsRemoteReturns(
+					"abc1234e3cca37862f4e612a7b14c4e00af6b935",
+					nil,
+				)
+				return runStep(taskWithResultFull("abc1234", tag, "released", tmpDir))
+			}
+
+			It("CreateReleaseOnConfirmedTag", func() {
+				fakeClient.CreateReleaseReturns(true, nil)
+
+				// The step removes the workdir on its terminal transition, so
+				// the expected body must be captured before runStep returns.
+				content, err := os.ReadFile(filepath.Join(tmpDir, "CHANGELOG.md"))
+				Expect(err).NotTo(HaveOccurred())
+				expectedBody, err := changelog.ExtractSectionBody(
+					context.Background(), content, "v1.0.0",
+				)
+				Expect(err).NotTo(HaveOccurred())
+
+				result, md := runConfirmedRelease("v1.0.0")
+
+				Expect(result.NextPhase).To(Equal("done"))
+				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+
+				Expect(fakeClient.CreateReleaseCallCount()).To(Equal(1))
+				_, _, _, tagArg, titleArg, bodyArg :=
+					fakeClient.CreateReleaseArgsForCall(0)
+				Expect(tagArg).To(Equal("v1.0.0"))
+				Expect(titleArg).To(Equal("v1.0.0"))
+				Expect(bodyArg).To(Equal(expectedBody))
+
+				Expect(extractReview(md).Checks.ReleaseExists).To(BeTrue())
+			})
+
+			It("CreateReleaseAlreadyExistsIsSuccess", func() {
+				fakeClient.CreateReleaseReturns(false, nil)
+
+				result, md := runConfirmedRelease("v1.0.0")
+
+				review := extractReview(md)
+				Expect(review.Checks.ReleaseExists).To(BeTrue())
+				Expect(result.NextPhase).To(Equal("done"))
+				Expect(review.FailedChecks).NotTo(ContainElement(pkg.CheckRelease))
+			})
+
+			It("CreateReleaseUnreachableFailsClosed", func() {
+				fakeClient.CreateReleaseReturns(
+					false,
+					fmt.Errorf(
+						"%w: dial tcp: connection refused",
+						githubreview.ErrReleaseUnreachable,
+					),
+				)
+
+				result, md := runConfirmedRelease("v1.0.0")
+
+				Expect(result.Status).To(Equal(agentlib.AgentStatusNeedsInput))
+				Expect(result.NextPhase).To(Equal("human_review"))
+
+				review := extractReview(md)
+				Expect(review.Checks.ReleaseExists).To(BeFalse())
+				Expect(review.FailedChecks).To(ContainElement(pkg.CheckRelease))
+				Expect(review.Notes).To(ContainSubstring("could not reach GitHub"))
+				Expect(review.Overall).To(Equal(pkg.OverallFail))
+				Expect(review.Approved).To(BeFalse())
+			})
+
+			It("CreateReleaseRejectedIsDistinctFromUnreachable", func() {
+				fakeClient.CreateReleaseReturns(
+					false,
+					fmt.Errorf(
+						"%w: status 403: forbidden",
+						githubreview.ErrReleaseRejected,
+					),
+				)
+
+				result, md := runConfirmedRelease("v1.0.0")
+
+				review := extractReview(md)
+				Expect(review.Notes).To(ContainSubstring("rejected the release"))
+				Expect(review.Notes).NotTo(ContainSubstring("could not reach GitHub"))
+				Expect(review.Checks.ReleaseExists).To(BeFalse())
+				Expect(result.NextPhase).To(Equal("human_review"))
+			})
+
+			It("CreateReleaseBodyUnreadableStillCreates", func() {
+				fakeClient.CreateReleaseReturns(true, nil)
+				fakeOps.LsRemoteReturns(
+					"abc1234e3cca37862f4e612a7b14c4e00af6b935",
+					nil,
+				)
+				DeferCleanup(func() { _ = os.RemoveAll(tmpDir) })
+				taskMD := strings.Replace(
+					taskWithResultFull("abc1234", "v1.0.0", "released", tmpDir),
+					`"local_tag":"v1.0.0"`,
+					`"local_tag":"v9.9.9"`,
+					1,
+				)
+
+				result, md := runStep(taskMD)
+
+				Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+				Expect(fakeClient.CreateReleaseCallCount()).To(Equal(1))
+				_, _, _, _, _, bodyArg := fakeClient.CreateReleaseArgsForCall(0)
+				Expect(bodyArg).To(Equal(""))
+
+				review := extractReview(md)
+				Expect(review.Notes).To(ContainSubstring("release body could not be read"))
+				Expect(review.Checks.ReleaseExists).To(BeTrue())
+			})
+
+			It("CreateReleaseNotCalledWhenTagUnconfirmed", func() {
+				fakeOps.LsRemoteReturns("", nil)
+				DeferCleanup(func() { _ = os.RemoveAll(tmpDir) })
+
+				result, _ := runStep(
+					taskWithResultFull("abc1234", "v1.0.0", "released", tmpDir),
+				)
+
+				Expect(fakeClient.CreateReleaseCallCount()).To(Equal(0))
+				Expect(result.Status).To(Equal(agentlib.AgentStatusFailed))
+				Expect(result.NextPhase).To(Equal("human_review"))
 			})
 		})
 

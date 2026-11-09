@@ -5,6 +5,7 @@
 package githubreview
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -26,14 +27,25 @@ import (
 // 5xx / transport errors (wrap and return; controller retries).
 var ErrTagNotFound = stderrors.New("githubreview: tag not found")
 
+// ErrReleaseUnreachable marks a CreateRelease error caused by a request that
+// could not be completed (DNS, TLS, proxy, timeout). Callers use
+// errors.Is(err, ErrReleaseUnreachable) to word the failure as "could not
+// reach GitHub" rather than "GitHub rejected the release".
+var ErrReleaseUnreachable = stderrors.New("githubreview: release creation unreachable")
+
+// ErrReleaseRejected marks a CreateRelease error caused by GitHub answering
+// with a non-2xx status that is not the already_exists 422.
+var ErrReleaseRejected = stderrors.New("githubreview: release creation rejected")
+
 // errBodyPreviewMax matches githubchangelog (200 bytes) — keeps non-2xx
 // response bodies short in error strings to avoid log spam.
 const errBodyPreviewMax = 200
 
 //counterfeiter:generate -o ../../mocks/review_client.go --fake-name ReviewClient . Client
 
-// Client is the seam for the three GitHub REST API calls needed by the
-// ai_review step. Mock it in tests with a counterfeiter-generated mock.
+// Client is the seam for the four GitHub REST API calls needed by the
+// ai_review step (TagExists, ResolveTagCommit, FetchChangelog,
+// CreateRelease). Mock it in tests with a counterfeiter-generated mock.
 type Client interface {
 	// TagExists calls GET /repos/{owner}/{repo}/git/ref/tags/{tag} and
 	// returns (tagSHA, nil) on 200, or ("", ErrTagNotFound) on 404,
@@ -49,6 +61,19 @@ type Client interface {
 	// (no ?ref= — relies on API defaulting to the repo's default branch).
 	// Returns base64-decoded file bytes or a wrapped error.
 	FetchChangelog(ctx context.Context, owner, repo string) ([]byte, error)
+
+	// CreateRelease calls POST /repos/{owner}/{repo}/releases.
+	//
+	// Returns:
+	//   - (true, nil)  — GitHub created the release (any 2xx).
+	//   - (false, nil) — GitHub answered 422 and the body names already_exists;
+	//     the release is present, it was simply not created by this call.
+	//   - (false, err) — transport failure (wrapping ErrReleaseUnreachable) or
+	//     any other non-2xx (wrapping ErrReleaseRejected).
+	CreateRelease(
+		ctx context.Context,
+		owner, repo, tag, title, body string,
+	) (created bool, _ error)
 }
 
 // NewHTTPClient returns the production client against api.github.com.
@@ -98,6 +123,12 @@ type tagObject struct {
 type contentResponse struct {
 	Encoding string `json:"encoding"`
 	Content  string `json:"content"`
+}
+
+type createReleaseRequest struct {
+	TagName string `json:"tag_name"`
+	Name    string `json:"name"`
+	Body    string `json:"body"`
 }
 
 // TagExists calls GET /repos/{owner}/{repo}/git/ref/tags/{tag}.
@@ -275,6 +306,69 @@ func (c *httpClient) FetchChangelog(ctx context.Context, owner, repo string) ([]
 		return nil, errors.Wrapf(ctx, err, "FetchChangelog: base64 decode")
 	}
 	return decoded, nil
+}
+
+// CreateRelease calls POST /repos/{owner}/{repo}/releases.
+//
+// The 422 already_exists response is the only non-error "did not create"
+// outcome: the release is present, it was simply not created by this call.
+func (c *httpClient) CreateRelease(
+	ctx context.Context,
+	owner, repo, tag, title, body string,
+) (bool, error) {
+	if owner == "" || repo == "" || tag == "" {
+		return false, errors.Errorf(ctx, "CreateRelease: owner/repo/tag must be non-empty")
+	}
+
+	endpoint := fmt.Sprintf(
+		"%s/repos/%s/%s/releases",
+		c.apiBase, url.PathEscape(owner), url.PathEscape(repo),
+	)
+	payload, err := json.Marshal(createReleaseRequest{TagName: tag, Name: title, Body: body})
+	if err != nil {
+		return false, errors.Wrapf(ctx, err, "CreateRelease: marshal request")
+	}
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, endpoint, bytes.NewReader(payload),
+	)
+	if err != nil {
+		return false, errors.Wrapf(ctx, err, "CreateRelease: build request")
+	}
+	c.setHeaders(req)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return false, errors.Wrapf(
+			ctx, ErrReleaseUnreachable, "CreateRelease: http: %v", err,
+		)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false, errors.Wrapf(ctx, err, "CreateRelease: read body")
+	}
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		glog.V(2).Infof(
+			"CreateRelease: POST %s status=%d created=true bytes=%d",
+			endpoint, resp.StatusCode, len(respBody),
+		)
+		return true, nil
+	}
+	if resp.StatusCode == http.StatusUnprocessableEntity &&
+		strings.Contains(string(respBody), "already_exists") {
+		return false, nil
+	}
+
+	preview := string(respBody)
+	if len(preview) > errBodyPreviewMax {
+		preview = preview[:errBodyPreviewMax]
+	}
+	return false, errors.Wrapf(
+		ctx, ErrReleaseRejected, "CreateRelease: status %d: %s", resp.StatusCode, preview,
+	)
 }
 
 func (c *httpClient) setHeaders(req *http.Request) {
