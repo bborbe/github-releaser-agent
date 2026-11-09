@@ -20,9 +20,11 @@ repos with a Dockerfile and no recorded review must add up to the Dockerfile
 population.
 
 Usage:
-    hack/report-image-opt-in.py [--tasks-dir DIR] [--dockerfile-repos FILE]
+    hack/report-image-opt-in.py --tasks-dir DIR [--dockerfile-repos FILE]
                                 [--github-owner bborbe] [--json]
 
+--tasks-dir is the directory holding the github-releaser task records (for
+example the `tasks/` directory of the agent vault).
 --dockerfile-repos points at a file of `owner/repo` lines, one per repo that
 carries a Dockerfile. When omitted the list is derived with `gh api
 search/code`, which needs an authenticated `gh`.
@@ -150,7 +152,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--tasks-dir",
-        default=os.path.expanduser("~/Documents/Obsidian/private-agent/tasks"),
+        required=True,
+        help="directory holding the github-releaser task records",
     )
     parser.add_argument("--dockerfile-repos", default=None)
     parser.add_argument("--github-owner", default="bborbe")
