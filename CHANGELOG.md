@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.9.0
 
 - feat: opt into `dockerBuild` (`autoBuild: true`, destination `dockerhub`) so a release tag builds and publishes `docker.io/bborbe/github-releaser-agent:<tag>` in-cluster. The template was fixed in v0.8.2, but without this block the build gate reads `autoBuild` as absent and dispatches nothing — which is why `v0.7.0`, `v0.8.0` and `v0.8.2` all shipped with no image
 
