@@ -16,6 +16,7 @@ import (
 
 	agentlib "github.com/bborbe/agent"
 	claudelib "github.com/bborbe/agent/claude"
+	"github.com/bborbe/collection"
 	"github.com/bborbe/errors"
 	"github.com/bborbe/github-releaser-agent/pkg/changelog"
 	"github.com/bborbe/github-releaser-agent/pkg/git"
@@ -24,6 +25,7 @@ import (
 	"github.com/bborbe/github-releaser-agent/pkg/maintainerconfig"
 	"github.com/bborbe/github-releaser-agent/pkg/plugin"
 	"github.com/bborbe/github-releaser-agent/pkg/prompts"
+	"github.com/bborbe/validation"
 	domain "github.com/bborbe/vault-cli/pkg/domain"
 	"github.com/golang/glog"
 )
@@ -57,6 +59,60 @@ const (
 	CheckImage                = "Image"
 	CheckRelease              = "Release"
 )
+
+// ImageOptIn is the closed set of reasons the image check did or did not
+// probe. It exists because image_expected=false is written for five distinct
+// causes, and a consumer must be able to tell a repo that never opted into
+// dockerBuild from one whose check never ran.
+type ImageOptIn string
+
+// Recognised ImageOptIn values. AvailableImageOptIns mirrors this set.
+const (
+	// ImageOptInAutoBuild: dockerBuild.autoBuild is true with at least one
+	// destination, so the primary destination's registry was probed.
+	ImageOptInAutoBuild ImageOptIn = "auto_build"
+	// ImageOptInNone: no dockerBuild block, or autoBuild absent/false.
+	// The repo never opted in.
+	ImageOptInNone ImageOptIn = "none"
+	// ImageOptInEmptyDestinations: autoBuild is true with an empty
+	// destinations list — a config fault, not an absence.
+	ImageOptInEmptyDestinations ImageOptIn = "empty_destinations"
+	// ImageOptInNoConfig: .maintainer.yaml is absent at the released tag.
+	ImageOptInNoConfig ImageOptIn = "no_config"
+	// ImageOptInSkipped: the check never ran — the pushed tag was not
+	// confirmed on the remote, or the short-circuit path was taken.
+	ImageOptInSkipped ImageOptIn = "skipped"
+)
+
+// ImageOptIns is a collection of ImageOptIn values.
+type ImageOptIns []ImageOptIn
+
+// AvailableImageOptIns lists every ImageOptIn value the system writes.
+var AvailableImageOptIns = ImageOptIns{
+	ImageOptInAutoBuild,
+	ImageOptInNone,
+	ImageOptInEmptyDestinations,
+	ImageOptInNoConfig,
+	ImageOptInSkipped,
+}
+
+// String returns the underlying string.
+func (i ImageOptIn) String() string {
+	return string(i)
+}
+
+// Contains reports whether the collection holds value.
+func (i ImageOptIns) Contains(value ImageOptIn) bool {
+	return collection.Contains(i, value)
+}
+
+// Validate reports an error when the value is not a recognised ImageOptIn.
+func (i ImageOptIn) Validate(ctx context.Context) error {
+	if !AvailableImageOptIns.Contains(i) {
+		return errors.Wrapf(ctx, validation.Error, "unknown image opt-in %q", string(i))
+	}
+	return nil
+}
 
 // Image-check wait defaults. The in-cluster build is asynchronous: the
 // watcher dispatches the Job on its own poll cycle and the build itself takes
@@ -113,6 +169,12 @@ type ReviewChecks struct {
 	// repo never opted in, or when the opt-in carries an empty
 	// destinations list.
 	ImageExpected bool `json:"image_expected"`
+
+	// ImageOptIn records WHY the image check did or did not probe, so a
+	// consumer can tell a repo that never opted into dockerBuild from the
+	// other causes of image_expected=false. Always one of
+	// AvailableImageOptIns; never empty.
+	ImageOptIn ImageOptIn `json:"image_opt_in"`
 
 	// ImageExists is true when the primary destination's registry serves
 	// a manifest at the released tag. Always false when ImageExpected is
@@ -286,6 +348,9 @@ func (s *aiReviewStep) Run(ctx context.Context, md *agentlib.Markdown) (*agentli
 	checks := ReviewChecks{
 		TagExists: true, TagAtExpectedSHA: true, ChangelogHeaderRewritten: true,
 		FaithfulnessOK: true,
+		// The image check has not run yet. Every path that never reaches
+		// applyImageCheck leaves this value in the ## Review block.
+		ImageOptIn: ImageOptInSkipped,
 	}
 	var failedChecks []string
 	// Workdir cleanup: ai-review owns the lifetime once execution
@@ -674,6 +739,7 @@ func (s *aiReviewStep) applyImageCheck(
 ) (*agentlib.Result, error) {
 	exp := s.resolveImageExpectation(ctx, owner, name, result.LocalTag)
 	output.Checks.ImageExpected = exp.expected
+	output.Checks.ImageOptIn = exp.optIn
 	output.Checks.ImageExists = false
 	if exp.note != "" {
 		output.Notes = appendReviewNote(output.Notes, exp.note)
@@ -771,6 +837,7 @@ type imageExpectation struct {
 	probe     bool
 	expected  bool
 	imageHost string
+	optIn     ImageOptIn
 	note      string
 }
 
@@ -789,10 +856,11 @@ func (s *aiReviewStep) resolveImageExpectation(
 				"ai_review image check: .maintainer.yaml absent at tag=%s — repo never opted in",
 				tag,
 			)
-			return imageExpectation{}
+			return imageExpectation{optIn: ImageOptInNoConfig}
 		}
 		return imageExpectation{
 			expected: true,
+			optIn:    ImageOptInSkipped,
 			note:     "image check could not fetch .maintainer.yaml: " + err.Error(),
 		}
 	}
@@ -800,16 +868,22 @@ func (s *aiReviewStep) resolveImageExpectation(
 	if err != nil {
 		return imageExpectation{
 			expected: true,
+			optIn:    ImageOptInSkipped,
 			note:     "image check could not parse .maintainer.yaml: " + err.Error(),
 		}
 	}
 	if destinationsEmpty {
-		return imageExpectation{note: "dockerBuild.destinations is empty"}
+		return imageExpectation{
+			optIn: ImageOptInEmptyDestinations,
+			note:  "dockerBuild.destinations is empty",
+		}
 	}
 	if !expected {
-		return imageExpectation{}
+		return imageExpectation{optIn: ImageOptInNone}
 	}
-	return imageExpectation{probe: true, expected: true, imageHost: imageHost}
+	return imageExpectation{
+		probe: true, expected: true, imageHost: imageHost, optIn: ImageOptInAutoBuild,
+	}
 }
 
 // appendReviewNote joins a non-fatal note onto the existing notes string.
@@ -1143,6 +1217,7 @@ func (s *aiReviewStep) writeShortCircuit(
 			ChangelogHeaderRewritten: true,
 			FaithfulnessOK:           true,
 			ImageExpected:            false,
+			ImageOptIn:               ImageOptInSkipped,
 			ImageExists:              false,
 		},
 		Overall: OverallPass,
