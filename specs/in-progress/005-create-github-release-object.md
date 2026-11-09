@@ -1,6 +1,7 @@
 ---
-status: draft
-kind: bug
+status: approved
+approved: "2026-11-09T16:44:40Z"
+branch: dark-factory/create-github-release-object
 ---
 
 ## Summary
