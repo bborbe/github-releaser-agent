@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.9.2
 
 - fix: a confirmed release now creates the GitHub Release object for its tag in the same run, with the tag as the only input. The `## Review` block records `release_exists`, and an unreachable or rejecting GitHub fails the `Release` check and parks the task at `human_review` instead of closing it. An already-existing release counts as present, so re-running a released task does not fail; a CHANGELOG section that cannot be read is created with an empty body plus a note.
 
