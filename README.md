@@ -16,11 +16,12 @@ producer that emits release tasks is
 
 ## How it works
 
-1. Read `CHANGELOG.md` and extract the `## Unreleased` bullets.
-2. Classify the semver bump (major / minor / patch) from those bullets.
-3. Compute the next version from the latest existing tag.
-4. Rewrite `## Unreleased` → `## vX.Y.Z` in `CHANGELOG.md`.
-5. Commit (`CHANGELOG.md` only — explicit path, never `git add -A`), tag
+1. Skip a task whose ref is already contained in the released tag — planning closes it as `completed` instead of re-planning the next version.
+2. Read `CHANGELOG.md` and extract the `## Unreleased` bullets.
+3. Classify the semver bump (major / minor / patch) from those bullets.
+4. Compute the next version from the latest existing tag.
+5. Rewrite `## Unreleased` → `## vX.Y.Z` in `CHANGELOG.md`.
+6. Commit (`CHANGELOG.md` only — explicit path, never `git add -A`), tag
    `vX.Y.Z`, and push commit + tag to `master`.
 
 On a protected branch the push works because the releaser's GitHub App is a

@@ -54,3 +54,8 @@ var SameCommitForTest = sameCommit
 // so the external _test package can assert the exact verdict token emitted
 // on each branch of the release-tag check.
 var ReleaseTagVerdictForTest = releaseTagVerdict
+
+// RefContainedInTagForTest exposes the unexported refContainedInTag helper
+// so the external _test package can pin the compare-payload contract,
+// including the nil-BehindBy case that must never read as containment.
+var RefContainedInTagForTest = refContainedInTag

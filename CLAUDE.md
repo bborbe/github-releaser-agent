@@ -101,7 +101,8 @@ Standalone binary; the shared lib is imported from `github.com/bborbe/maintainer
 
 - **LLM only classifies; git writes are deterministic Go.** The Claude step returns a bump verdict only. The rewrite/commit/tag/push is plain code — a broken LLM can never author a commit.
 - **Commits touch `CHANGELOG.md` only**, via explicit pathspec. Never `git add -A` / `git add .`.
-- **Escalation over guessing.** A planning step that cannot proceed returns `NeedsInput`/`human_review` (clear assignee, set `previous_assignee: github-releaser-agent`) — never auto-advances to `done`.
+- **Escalation over guessing.** A planning step that cannot proceed returns `NeedsInput`/`human_review` (clear assignee, set `previous_assignee: github-releaser-agent`) — never auto-advances to `done`, except the nothing_to_release carve-outs below.
+- **Containment closure.** Planning closes a release task as `nothing_to_release` when the task's `ref` is already contained in the released tag — GitHub's compare of `ref...tag-commit` reports `behind_by: 0` with status `ahead` or `identical`. Fail-open on any lookup or compare error, on an unknown status, and on an absent `behind_by` key.
 - **Major-bump guard** — a `major` verdict without `release.allowMajorBump: true` (or `--allow-major`) escalates instead of cutting a major. Decision table is spec-frozen in `pkg/steps_planning.go` `applyMajorBumpGuard`; changing it MUST update the upstream spec first.
 - **Factory functions are pure composition** — no conditionals, no I/O, no `context.Background()`.
 - **Errors** use `github.com/bborbe/errors` with context wrapping; **logging** is `glog` with `V(n)`-gated `Info`.

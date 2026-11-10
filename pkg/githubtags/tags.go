@@ -45,6 +45,30 @@ type TagsFetcher interface {
 	// decode, entry with an empty commit sha) return a wrapped error.
 	// Costs one tags-list pagination — never one request per tag.
 	CommitSHAForTag(ctx context.Context, owner, repo, tag string) (string, error)
+
+	// CompareCommits returns GitHub's comparison of base...head for
+	// owner/repo. Costs one compare call — no pagination, no per-commit
+	// request. Returns a wrapped error on empty args, transport failure,
+	// non-2xx (including 404 for an unknown ref), and decode failure.
+	// BehindBy is nil when the payload does not carry the key.
+	CompareCommits(ctx context.Context, owner, repo, base, head string) (CompareResult, error)
+}
+
+// CompareResult is the subset of GitHub's compare payload the planning step
+// needs. BehindBy is the number of commits HEAD lacks that BASE has, and is
+// the only field that decides containment — AheadBy is decoded so the
+// decision can be logged with both directions visible, never for control
+// flow.
+//
+// BehindBy is a POINTER so a payload that omits or renames the key is
+// distinguishable from a genuine 0. An absent key must never read as
+// "contained": that would close a release task with unreleased work on a
+// shape change, which is the exact class of defect the containment guard
+// exists to remove (spec 006 § Failure Modes row 6).
+type CompareResult struct {
+	Status   string `json:"status"`
+	AheadBy  int    `json:"ahead_by"`
+	BehindBy *int   `json:"behind_by"`
 }
 
 // ErrNoTags signals the repo has no usable semver tag (empty tag list,
@@ -169,16 +193,19 @@ func (f *httpTagsFetcher) LatestSemverTag(ctx context.Context, owner, repo strin
 	return latest, nil
 }
 
-// fetchPage performs one HTTP GET for a single page of tags. It returns
-// the tag entries from that page and the next-page URL (from the RFC 5988
-// Link header), or "" when no "rel=next" link is present.
-func (f *httpTagsFetcher) fetchPage(
+// doGet performs one authenticated GET and returns the body and response
+// headers, erroring on transport failure, a read failure, or a non-2xx
+// status. It is the single request/response plumbing site for this package,
+// shared by fetchPage and CompareCommits so the header set and the error
+// wording exist once. op prefixes every message ("list tags", "compare
+// commits") so a failure names the endpoint that produced it.
+func (f *httpTagsFetcher) doGet(
 	ctx context.Context,
-	pageURL string,
-) (tags []tagResponse, nextURL string, err error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
+	rawURL, op string,
+) (body []byte, hdr http.Header, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, "", errors.Wrapf(ctx, err, "list tags: build request")
+		return nil, nil, errors.Wrapf(ctx, err, "%s: build request", op)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
@@ -188,13 +215,13 @@ func (f *httpTagsFetcher) fetchPage(
 
 	resp, err := f.client.Do(req)
 	if err != nil {
-		return nil, "", errors.Wrapf(ctx, err, "list tags: http %s", pageURL)
+		return nil, nil, errors.Wrapf(ctx, err, "%s: http %s", op, rawURL)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err = io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, "", errors.Wrapf(ctx, err, "list tags: read body")
+		return nil, nil, errors.Wrapf(ctx, err, "%s: read body", op)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -202,17 +229,33 @@ func (f *httpTagsFetcher) fetchPage(
 		if len(preview) > 200 {
 			preview = preview[:200]
 		}
-		return nil, "", errors.Errorf(
+		return nil, nil, errors.Errorf(
 			ctx,
-			"list tags: status %d: %s",
+			"%s: status %d: %s",
+			op,
 			resp.StatusCode,
 			preview,
 		)
 	}
 
-	linkHdr := resp.Header.Get("Link")
+	glog.V(2).Infof("%s: GET %s status=%d bytes=%d", op, rawURL, resp.StatusCode, len(body))
+	return body, resp.Header, nil
+}
+
+// fetchPage performs one HTTP GET for a single page of tags. It returns
+// the tag entries from that page and the next-page URL (from the RFC 5988
+// Link header), or "" when no "rel=next" link is present.
+func (f *httpTagsFetcher) fetchPage(
+	ctx context.Context,
+	pageURL string,
+) (tags []tagResponse, nextURL string, err error) {
+	body, hdr, err := f.doGet(ctx, pageURL, "list tags")
+	if err != nil {
+		return nil, "", err
+	}
+
+	linkHdr := hdr.Get("Link")
 	next := nextLink(linkHdr)
-	glog.V(2).Infof("list tags: GET %s status=%d bytes=%d", pageURL, resp.StatusCode, len(body))
 	glog.V(3).Infof("list tags: Link header: %q nextLink=%q", linkHdr, next)
 
 	var tagEntries []tagResponse
@@ -221,6 +264,57 @@ func (f *httpTagsFetcher) fetchPage(
 	}
 
 	return tagEntries, next, nil
+}
+
+// CompareCommits implements TagsFetcher. base is the task's ref and head is
+// the tag's commit; GitHub's compare(base...head) therefore reports
+// behind_by = commits head lacks that base has, so behind_by == 0 means the
+// tag already contains the ref (spec 006 § Desired Behavior 2).
+func (f *httpTagsFetcher) CompareCommits(
+	ctx context.Context,
+	owner, repo, base, head string,
+) (CompareResult, error) {
+	if owner == "" {
+		return CompareResult{}, errors.Errorf(ctx, "compare commits: owner empty")
+	}
+	if repo == "" {
+		return CompareResult{}, errors.Errorf(ctx, "compare commits: repo empty")
+	}
+	if base == "" {
+		return CompareResult{}, errors.Errorf(ctx, "compare commits: base empty")
+	}
+	if head == "" {
+		return CompareResult{}, errors.Errorf(ctx, "compare commits: head empty")
+	}
+
+	endpoint := fmt.Sprintf(
+		"%s/repos/%s/%s/compare/%s...%s",
+		f.apiBase,
+		url.PathEscape(owner),
+		url.PathEscape(repo),
+		url.PathEscape(base),
+		url.PathEscape(head),
+	)
+
+	body, _, err := f.doGet(ctx, endpoint, "compare commits")
+	if err != nil {
+		return CompareResult{}, err
+	}
+
+	var result CompareResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		return CompareResult{}, errors.Wrapf(ctx, err, "compare commits: decode json")
+	}
+
+	behind := "absent"
+	if result.BehindBy != nil {
+		behind = fmt.Sprintf("%d", *result.BehindBy)
+	}
+	glog.V(2).Infof(
+		"compare commits: %s/%s base=%s head=%s status=%s ahead=%d behind=%s",
+		owner, repo, base, head, result.Status, result.AheadBy, behind,
+	)
+	return result, nil
 }
 
 // CommitSHAForTag implements TagsFetcher.

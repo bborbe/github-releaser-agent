@@ -592,3 +592,92 @@ var _ = Describe("httpTagsFetcher", func() {
 		Expect(capturedAuth).To(Equal("Bearer test-token"))
 	})
 })
+
+var _ = Describe("CompareCommits", func() {
+	ctx := context.Background()
+
+	It("traverses the real endpoint, headers and JSON field names", func() {
+		var gotPath, gotAccept, gotVersion, gotAuth string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			gotAccept = r.Header.Get("Accept")
+			gotVersion = r.Header.Get("X-GitHub-Api-Version")
+			gotAuth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"ahead","ahead_by":1,"behind_by":0}`))
+		}))
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+		got, err := fetcher.CompareCommits(ctx, "owner", "repo", "base", "head")
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(gotPath).To(Equal("/repos/owner/repo/compare/base...head"))
+		Expect(gotAccept).To(Equal("application/vnd.github+json"))
+		Expect(gotVersion).To(Equal("2022-11-28"))
+		Expect(gotAuth).To(Equal("Bearer test-token"))
+
+		Expect(got.Status).To(Equal("ahead"))
+		Expect(got.AheadBy).To(Equal(1))
+		Expect(got.BehindBy).NotTo(BeNil())
+		Expect(*got.BehindBy).To(Equal(0))
+	})
+
+	It("decodes an absent behind_by as nil, never as zero", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"ahead","ahead_by":1}`))
+		}))
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+		got, err := fetcher.CompareCommits(ctx, "owner", "repo", "base", "head")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got.BehindBy).To(BeNil())
+	})
+
+	It("returns a wrapped error on 404", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"message":"Not Found"}`))
+		}))
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+		_, err := fetcher.CompareCommits(ctx, "owner", "repo", "base", "head")
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("returns a wrapped error on malformed JSON", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{not json`))
+		}))
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+		_, err := fetcher.CompareCommits(ctx, "owner", "repo", "base", "head")
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("rejects empty arguments without making a request", func() {
+		reached := false
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			reached = true
+		}))
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+
+		_, err := fetcher.CompareCommits(ctx, "", "repo", "base", "head")
+		Expect(err).To(HaveOccurred())
+		_, err = fetcher.CompareCommits(ctx, "owner", "", "base", "head")
+		Expect(err).To(HaveOccurred())
+		_, err = fetcher.CompareCommits(ctx, "owner", "repo", "", "head")
+		Expect(err).To(HaveOccurred())
+		_, err = fetcher.CompareCommits(ctx, "owner", "repo", "base", "")
+		Expect(err).To(HaveOccurred())
+
+		Expect(reached).To(BeFalse())
+	})
+})

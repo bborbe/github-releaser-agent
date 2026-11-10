@@ -102,12 +102,17 @@ const (
 	// keeps the task in_progress and waits for operator re-delegation.
 	// See spec 059 § Desired Behavior 5 and § AC 11/12.
 	PlanOutcomeFailed = "failed"
-	// PlanOutcomeNothingToRelease signals the task targets a commit that
-	// is ALREADY released: the effective current version's tag points at
-	// the task's own ref. Terminal success — the step returns
-	// Status=AgentStatusDone, NextPhase="done" and writes NO escalation
-	// frontmatter. Only ever written on a positive, observed SHA match
-	// (spec 002 § Desired Behavior 2/3).
+	// PlanOutcomeNothingToRelease signals the task's work is ALREADY
+	// released. Two cases write it, both requiring a positive GitHub
+	// answer: (a) equality — the effective current version's tag points
+	// at the task's own ref, reached only on a P1_unreleased_not_first
+	// failure (spec 002); and (b) containment — on any planning pass,
+	// GitHub's compare of ref...tag-commit reports behind_by 0 with
+	// status "ahead" or "identical", so the tag already contains the ref
+	// (spec 006). Terminal success — the step returns Status=AgentStatusDone,
+	// NextPhase="done" and writes NO escalation frontmatter. Any
+	// uncertainty (absent tag, transport or decode error, unknown status,
+	// absent behind_by key) falls back to planning.
 	PlanOutcomeNothingToRelease = "nothing_to_release"
 )
 
