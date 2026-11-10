@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.10.0
 
 - feat: the `## Review` block records `image_opt_in` alongside `image_expected`, so a consumer can tell a repo that never opted into `dockerBuild` (`none`) from one whose check never ran (`skipped`), a missing `.maintainer.yaml` (`no_config`), an empty `destinations` list (`empty_destinations`), and a probed build (`auto_build`). `image_expected: false` was previously written for all five causes and could not be counted, so a repo carrying a `Dockerfile` and no opt-in closed `pass` with nothing naming the gap. `hack/report-image-opt-in.py` reads the recorded release reviews and lists every such repo, reconciling the reviewed and unreviewed populations.
 
