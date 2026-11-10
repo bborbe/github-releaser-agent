@@ -8,6 +8,7 @@ replace (
 
 require (
 	github.com/bborbe/agent v0.132.5
+	github.com/bborbe/collection v1.21.4
 	github.com/bborbe/cqrs v0.6.15
 	github.com/bborbe/errors v1.6.5
 	github.com/bborbe/kafka v1.29.2
@@ -15,6 +16,7 @@ require (
 	github.com/bborbe/sentry v1.10.6
 	github.com/bborbe/service v1.11.2
 	github.com/bborbe/time v1.27.19
+	github.com/bborbe/validation v1.5.6
 	github.com/bborbe/vault-cli v0.184.0
 	github.com/golang/glog v1.2.5
 	github.com/onsi/ginkgo/v2 v2.33.1
@@ -27,7 +29,6 @@ require (
 	github.com/IBM/sarama v1.61.1 // indirect
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/bborbe/argument/v2 v2.13.8 // indirect
-	github.com/bborbe/collection v1.21.4 // indirect
 	github.com/bborbe/http v1.26.32 // indirect
 	github.com/bborbe/k8s v1.14.24 // indirect
 	github.com/bborbe/kv v1.21.20 // indirect
@@ -37,7 +38,6 @@ require (
 	github.com/bborbe/parse v1.12.4 // indirect
 	github.com/bborbe/run v1.11.5 // indirect
 	github.com/bborbe/strimzi v1.8.23 // indirect
-	github.com/bborbe/validation v1.5.6 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bradleyfalzon/ghinstallation/v2 v2.19.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
