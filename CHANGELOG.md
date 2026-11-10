@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- chore: update github.com/bborbe/agent to v0.139.7, github.com/bborbe/collection to v1.21.6, github.com/bborbe/errors to v1.6.6, github.com/bborbe/kafka to v1.29.13, github.com/bborbe/maintainer to v0.51.1, github.com/bborbe/sentry to v1.10.7, github.com/bborbe/time to v1.27.26, github.com/bborbe/validation to v1.5.9, github.com/bborbe/vault-cli to v0.191.0, github.com/onsi/ginkgo/v2 to v2.34.0
+
 ## v0.10.1
 
 - fix(planning): a release task whose ref is already contained in the effective current version's tag now closes as `completed` instead of re-planning the next version. The "already released?" check previously ran only after a `P1_unreleased_not_first` validation failure, so a healthy re-trigger re-planned forever and never wrote a terminal state — measured across 24 records on 2026-11-08. The check now runs on every planning pass and uses GitHub's compare payload (ref contained in the tag commit) rather than commit equality, which could never fire because the release commit is a child of the task ref. A ref ahead of or diverged from the tag still plans; any lookup or compare error falls through to planning unchanged
