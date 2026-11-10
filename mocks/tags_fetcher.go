@@ -28,6 +28,23 @@ type TagsFetcher struct {
 		result1 string
 		result2 error
 	}
+	CompareCommitsStub        func(context.Context, string, string, string, string) (githubtags.CompareResult, error)
+	compareCommitsMutex       sync.RWMutex
+	compareCommitsArgsForCall []struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 string
+		arg5 string
+	}
+	compareCommitsReturns struct {
+		result1 githubtags.CompareResult
+		result2 error
+	}
+	compareCommitsReturnsOnCall map[int]struct {
+		result1 githubtags.CompareResult
+		result2 error
+	}
 	LatestSemverTagStub        func(context.Context, string, string) (string, error)
 	latestSemverTagMutex       sync.RWMutex
 	latestSemverTagArgsForCall []struct {
@@ -110,6 +127,74 @@ func (fake *TagsFetcher) CommitSHAForTagReturnsOnCall(i int, result1 string, res
 	}
 	fake.commitSHAForTagReturnsOnCall[i] = struct {
 		result1 string
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *TagsFetcher) CompareCommits(arg1 context.Context, arg2 string, arg3 string, arg4 string, arg5 string) (githubtags.CompareResult, error) {
+	fake.compareCommitsMutex.Lock()
+	ret, specificReturn := fake.compareCommitsReturnsOnCall[len(fake.compareCommitsArgsForCall)]
+	fake.compareCommitsArgsForCall = append(fake.compareCommitsArgsForCall, struct {
+		arg1 context.Context
+		arg2 string
+		arg3 string
+		arg4 string
+		arg5 string
+	}{arg1, arg2, arg3, arg4, arg5})
+	stub := fake.CompareCommitsStub
+	fakeReturns := fake.compareCommitsReturns
+	fake.recordInvocation("CompareCommits", []interface{}{arg1, arg2, arg3, arg4, arg5})
+	fake.compareCommitsMutex.Unlock()
+	if stub != nil {
+		return stub(arg1, arg2, arg3, arg4, arg5)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2
+	}
+	return fakeReturns.result1, fakeReturns.result2
+}
+
+func (fake *TagsFetcher) CompareCommitsCallCount() int {
+	fake.compareCommitsMutex.RLock()
+	defer fake.compareCommitsMutex.RUnlock()
+	return len(fake.compareCommitsArgsForCall)
+}
+
+func (fake *TagsFetcher) CompareCommitsCalls(stub func(context.Context, string, string, string, string) (githubtags.CompareResult, error)) {
+	fake.compareCommitsMutex.Lock()
+	defer fake.compareCommitsMutex.Unlock()
+	fake.CompareCommitsStub = stub
+}
+
+func (fake *TagsFetcher) CompareCommitsArgsForCall(i int) (context.Context, string, string, string, string) {
+	fake.compareCommitsMutex.RLock()
+	defer fake.compareCommitsMutex.RUnlock()
+	argsForCall := fake.compareCommitsArgsForCall[i]
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4, argsForCall.arg5
+}
+
+func (fake *TagsFetcher) CompareCommitsReturns(result1 githubtags.CompareResult, result2 error) {
+	fake.compareCommitsMutex.Lock()
+	defer fake.compareCommitsMutex.Unlock()
+	fake.CompareCommitsStub = nil
+	fake.compareCommitsReturns = struct {
+		result1 githubtags.CompareResult
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *TagsFetcher) CompareCommitsReturnsOnCall(i int, result1 githubtags.CompareResult, result2 error) {
+	fake.compareCommitsMutex.Lock()
+	defer fake.compareCommitsMutex.Unlock()
+	fake.CompareCommitsStub = nil
+	if fake.compareCommitsReturnsOnCall == nil {
+		fake.compareCommitsReturnsOnCall = make(map[int]struct {
+			result1 githubtags.CompareResult
+			result2 error
+		})
+	}
+	fake.compareCommitsReturnsOnCall[i] = struct {
+		result1 githubtags.CompareResult
 		result2 error
 	}{result1, result2}
 }

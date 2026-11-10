@@ -24,6 +24,11 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+// intPtr returns a pointer to i. CompareResult.BehindBy is a pointer so an
+// absent `behind_by` key is distinguishable from a genuine 0 (spec 006
+// § Failure Modes row 6); fixtures need this to express a real zero.
+func intPtr(i int) *int { return &i }
+
 // withChangelogRewriteTrue returns a MaintainerConfigFetcher mock whose
 // Fetch returns a YAML byte slice with `release.changelogRewrite: true`.
 // spec 059: tests that expect the 058 rewrite pipeline to run must use
@@ -2498,7 +2503,7 @@ var _ = Describe("steps_planning nothing_to_release (spec 002)", func() {
 			Expect(fakeRunner.RunCallCount()).To(Equal(0))
 		})
 
-		It("non-hex ref cannot match", func() {
+		It("non-hex ref cannot match by commit equality", func() {
 			fakeFetcher := &mocks.Fetcher{}
 			fakeFetcher.FetchReturns(releasedChangelog, nil)
 			fakeRunner := &mocks.ClaudeRunnerMock{}
@@ -2527,7 +2532,7 @@ var _ = Describe("steps_planning nothing_to_release (spec 002)", func() {
 			Expect(fakeRunner.RunCallCount()).To(Equal(0))
 		})
 
-		It("other preconditions never consult the tag seam", func() {
+		It("other preconditions consult the tag seam once but still escalate", func() {
 			// Unreleased is first but empty → P2_unreleased_empty.
 			emptyUnreleasedChangelog := []byte("## Unreleased\n\n## v0.3.1\n\n- old\n")
 			fakeFetcher := &mocks.Fetcher{}
@@ -2535,9 +2540,13 @@ var _ = Describe("steps_planning nothing_to_release (spec 002)", func() {
 			fakeRunner := &mocks.ClaudeRunnerMock{}
 			tagsFetcher := &mocks.TagsFetcher{}
 			tagsFetcher.LatestSemverTagReturns("v0.3.1", nil)
-			// Deliberately return a matching SHA — if the seam were consulted
-			// this would incorrectly complete instead of escalating.
+			// The containment guard consults the tag seam once on every pass
+			// (spec 006). GitHub reports the ref is NOT contained, so planning
+			// still reaches the unchanged P2 escalation below.
 			tagsFetcher.CommitSHAForTagReturns(incidentSHA, nil)
+			tagsFetcher.CompareCommitsReturns(
+				githubtags.CompareResult{Status: "behind", BehindBy: intPtr(2)}, nil,
+			)
 
 			step := pkg.NewPlanningStep(
 				fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, tagsFetcher, false,
@@ -2557,13 +2566,13 @@ var _ = Describe("steps_planning nothing_to_release (spec 002)", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(plan.PreconditionFailed).To(Equal(pkg.PreconditionP2UnreleasedEmpty))
 
-			// Tag seam was NEVER consulted.
-			Expect(tagsFetcher.CommitSHAForTagCallCount()).To(Equal(0))
+			// Tag seam consulted exactly once, by the containment guard.
+			Expect(tagsFetcher.CommitSHAForTagCallCount()).To(Equal(1))
 
 			Expect(fakeRunner.RunCallCount()).To(Equal(0))
 		})
 
-		It("happy path makes no extra request", func() {
+		It("happy path consults the tag seam once and still plans", func() {
 			healthyChangelog := []byte("## Unreleased\n\n- feat: add foo\n\n## v0.3.1\n\n- old\n")
 			fakeFetcher := &mocks.Fetcher{}
 			fakeFetcher.FetchReturns(healthyChangelog, nil)
@@ -2573,9 +2582,12 @@ var _ = Describe("steps_planning nothing_to_release (spec 002)", func() {
 			}, nil)
 			tagsFetcher := &mocks.TagsFetcher{}
 			tagsFetcher.LatestSemverTagReturns("v0.3.1", nil)
-			// Deliberately return a matching SHA — if consulted this path
-			// would be the wrong behavior.
+			// The containment guard consults the seam once; GitHub reports the
+			// ref is NOT contained, so this still plans a release (spec 006).
 			tagsFetcher.CommitSHAForTagReturns(incidentSHA, nil)
+			tagsFetcher.CompareCommitsReturns(
+				githubtags.CompareResult{Status: "behind", BehindBy: intPtr(2)}, nil,
+			)
 
 			step := pkg.NewPlanningStep(
 				fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, tagsFetcher, false,
@@ -2595,8 +2607,8 @@ var _ = Describe("steps_planning nothing_to_release (spec 002)", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(plan.Outcome).To(Equal(pkg.PlanOutcomeReady))
 
-			// Tag seam was NEVER consulted.
-			Expect(tagsFetcher.CommitSHAForTagCallCount()).To(Equal(0))
+			// Tag seam consulted exactly once, by the containment guard.
+			Expect(tagsFetcher.CommitSHAForTagCallCount()).To(Equal(1))
 		})
 	})
 
@@ -2852,3 +2864,373 @@ var _ = func() *agentlib.Agent {
 		false, // spec 060: per-run allowMajor
 	)
 }
+
+var _ = Describe("steps_planning containment guard (spec 006)", func() {
+	const (
+		refSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		tagSHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+
+	// The P1 shape: no ## Unreleased at all, first ## heading is a version
+	// header. Used only where the guard must NOT close.
+	releasedChangelog := []byte(
+		"# Changelog\n\nIntro.\n\n## v0.3.1\n\n- fix: something\n",
+	)
+
+	// The pre-fix shape the defect takes: a VALID ## Unreleased present at
+	// the task's ref. Before the guard, this planned the next version.
+	planChangelog := []byte("## Unreleased\n\n- feat: add foo\n\n## v0.3.1\n\n- old\n")
+
+	taskMD := func(ref string) string {
+		return "---\nstatus: in_progress\nphase: planning\n" +
+			"assignee: github-releaser-agent\ntask_type: github-release\n" +
+			"repo: bborbe/tts-mcp\nclone_url: https://github.com/bborbe/tts-mcp.git\n" +
+			"ref: " + ref + "\ncurrent_version: v0.3.1\n" +
+			"task_identifier: gh-release-bborbe-tts-mcp-spec006\n---\n\n# release task\n"
+	}
+
+	// newStep builds a step with the effective version primed, so
+	// effectiveVersion is never empty (an unset LatestSemverTag returns
+	// ("", nil), which escalates and would make every "still plans" case
+	// pass for the wrong reason).
+	newStep := func(
+		fakeRunner *mocks.ClaudeRunnerMock,
+		fakeFetcher *mocks.Fetcher,
+		maintainerConfig *mocks.MaintainerConfigFetcher,
+		tagsFetcher *mocks.TagsFetcher,
+	) agentlib.Step {
+		tagsFetcher.LatestSemverTagReturns("v0.3.1", nil)
+		return pkg.NewPlanningStep(fakeRunner, fakeFetcher, maintainerConfig, tagsFetcher, false)
+	}
+
+	It("a task whose ref is already released closes terminal instead of re-planning", func() {
+		fakeFetcher := &mocks.Fetcher{}
+		fakeFetcher.FetchReturns(planChangelog, nil)
+		fakeRunner := &mocks.ClaudeRunnerMock{}
+		maintainerConfig := &mocks.MaintainerConfigFetcher{}
+		tagsFetcher := &mocks.TagsFetcher{}
+		tagsFetcher.CommitSHAForTagReturns(tagSHA, nil)
+		tagsFetcher.CompareCommitsReturns(
+			githubtags.CompareResult{Status: "ahead", AheadBy: 1, BehindBy: intPtr(0)}, nil,
+		)
+
+		step := newStep(fakeRunner, fakeFetcher, maintainerConfig, tagsFetcher)
+		md, err := agentlib.ParseMarkdown(context.Background(), taskMD(refSHA))
+		Expect(err).NotTo(HaveOccurred())
+
+		result, err := step.Run(context.Background(), md)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+		Expect(result.NextPhase).To(Equal("done"))
+
+		plan, err := agentlib.ExtractSection[pkg.PlanOutput](context.Background(), md, "## Plan")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(plan.Outcome).To(Equal(pkg.PlanOutcomeNothingToRelease))
+		Expect(plan.Reason).To(ContainSubstring("v0.3.1"))
+		Expect(plan.Reason).To(ContainSubstring(tagSHA))
+		Expect(plan.Reason).NotTo(ContainSubstring("is the commit tag"))
+
+		Expect(md.Frontmatter["status"]).To(Equal("completed"))
+		Expect(md.Frontmatter["phase"]).To(Equal("done"))
+		Expect(md.Frontmatter).NotTo(HaveKey("previous_assignee"))
+		Expect(md.Frontmatter["assignee"]).To(Equal("github-releaser-agent"))
+
+		// No work on the closing path: no LLM, no changelog, no config read.
+		Expect(fakeRunner.RunCallCount()).To(Equal(0))
+		Expect(fakeFetcher.FetchCallCount()).To(Equal(0))
+		Expect(maintainerConfig.FetchCallCount()).To(Equal(0))
+		Expect(tagsFetcher.CommitSHAForTagCallCount()).To(Equal(1))
+		Expect(tagsFetcher.CompareCommitsCallCount()).To(Equal(1))
+
+		// The compare is called with base=ref, head=tag commit.
+		_, _, _, base, head := tagsFetcher.CompareCommitsArgsForCall(0)
+		Expect(base).To(Equal(refSHA))
+		Expect(head).To(Equal(tagSHA))
+	})
+
+	It("an identical ref still closes", func() {
+		fakeFetcher := &mocks.Fetcher{}
+		fakeFetcher.FetchReturns(planChangelog, nil)
+		tagsFetcher := &mocks.TagsFetcher{}
+		tagsFetcher.CommitSHAForTagReturns(tagSHA, nil)
+		tagsFetcher.CompareCommitsReturns(
+			githubtags.CompareResult{Status: "identical", AheadBy: 0, BehindBy: intPtr(0)}, nil,
+		)
+
+		step := newStep(
+			&mocks.ClaudeRunnerMock{},
+			fakeFetcher,
+			&mocks.MaintainerConfigFetcher{},
+			tagsFetcher,
+		)
+		md, err := agentlib.ParseMarkdown(context.Background(), taskMD(refSHA))
+		Expect(err).NotTo(HaveOccurred())
+
+		result, err := step.Run(context.Background(), md)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.NextPhase).To(Equal("done"))
+	})
+
+	It("a ref ahead of the tag still plans a release", func() {
+		fakeFetcher := &mocks.Fetcher{}
+		fakeFetcher.FetchReturns(planChangelog, nil)
+		fakeRunner := &mocks.ClaudeRunnerMock{}
+		fakeRunner.RunReturns(&claudelib.ClaudeResult{
+			Result: `{"bump":"patch","reasoning":"stub"}`,
+		}, nil)
+		tagsFetcher := &mocks.TagsFetcher{}
+		tagsFetcher.CommitSHAForTagReturns(tagSHA, nil)
+		tagsFetcher.CompareCommitsReturns(
+			githubtags.CompareResult{Status: "behind", AheadBy: 0, BehindBy: intPtr(2)}, nil,
+		)
+
+		step := newStep(fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, tagsFetcher)
+		md, err := agentlib.ParseMarkdown(context.Background(), taskMD(refSHA))
+		Expect(err).NotTo(HaveOccurred())
+
+		result, err := step.Run(context.Background(), md)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.NextPhase).NotTo(Equal("done"))
+
+		plan, err := agentlib.ExtractSection[pkg.PlanOutput](context.Background(), md, "## Plan")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(plan.Outcome).To(Equal(pkg.PlanOutcomeReady))
+	})
+
+	It("a diverged ref still plans a release", func() {
+		fakeFetcher := &mocks.Fetcher{}
+		fakeFetcher.FetchReturns(planChangelog, nil)
+		fakeRunner := &mocks.ClaudeRunnerMock{}
+		fakeRunner.RunReturns(&claudelib.ClaudeResult{
+			Result: `{"bump":"patch","reasoning":"stub"}`,
+		}, nil)
+		tagsFetcher := &mocks.TagsFetcher{}
+		tagsFetcher.CommitSHAForTagReturns(tagSHA, nil)
+		tagsFetcher.CompareCommitsReturns(
+			githubtags.CompareResult{Status: "diverged", AheadBy: 3, BehindBy: intPtr(2)}, nil,
+		)
+
+		step := newStep(fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, tagsFetcher)
+		md, err := agentlib.ParseMarkdown(context.Background(), taskMD(refSHA))
+		Expect(err).NotTo(HaveOccurred())
+
+		result, err := step.Run(context.Background(), md)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.NextPhase).NotTo(Equal("done"))
+
+		plan, err := agentlib.ExtractSection[pkg.PlanOutput](context.Background(), md, "## Plan")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(plan.Outcome).To(Equal(pkg.PlanOutcomeReady))
+	})
+
+	It("a compare error fails open to planning", func() {
+		fakeFetcher := &mocks.Fetcher{}
+		fakeFetcher.FetchReturns(planChangelog, nil)
+		fakeRunner := &mocks.ClaudeRunnerMock{}
+		fakeRunner.RunReturns(&claudelib.ClaudeResult{
+			Result: `{"bump":"patch","reasoning":"stub"}`,
+		}, nil)
+		tagsFetcher := &mocks.TagsFetcher{}
+		tagsFetcher.CommitSHAForTagReturns(tagSHA, nil)
+		tagsFetcher.CompareCommitsReturns(
+			githubtags.CompareResult{}, stderrors.New("compare commits: status 503"),
+		)
+
+		step := newStep(fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, tagsFetcher)
+		md, err := agentlib.ParseMarkdown(context.Background(), taskMD(refSHA))
+		Expect(err).NotTo(HaveOccurred())
+
+		result, err := step.Run(context.Background(), md)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.NextPhase).NotTo(Equal("done"))
+
+		plan, err := agentlib.ExtractSection[pkg.PlanOutput](context.Background(), md, "## Plan")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(plan.Outcome).To(Equal(pkg.PlanOutcomeReady))
+	})
+
+	It("an absent tag fails open without attempting a compare", func() {
+		fakeFetcher := &mocks.Fetcher{}
+		fakeFetcher.FetchReturns(planChangelog, nil)
+		fakeRunner := &mocks.ClaudeRunnerMock{}
+		fakeRunner.RunReturns(&claudelib.ClaudeResult{
+			Result: `{"bump":"patch","reasoning":"stub"}`,
+		}, nil)
+		tagsFetcher := &mocks.TagsFetcher{}
+		tagsFetcher.CommitSHAForTagReturns("", githubtags.ErrTagNotFound)
+
+		step := newStep(fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, tagsFetcher)
+		md, err := agentlib.ParseMarkdown(context.Background(), taskMD(refSHA))
+		Expect(err).NotTo(HaveOccurred())
+
+		result, err := step.Run(context.Background(), md)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.NextPhase).NotTo(Equal("done"))
+		Expect(tagsFetcher.CompareCommitsCallCount()).To(Equal(0))
+
+		plan, err := agentlib.ExtractSection[pkg.PlanOutput](context.Background(), md, "## Plan")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(plan.Outcome).To(Equal(pkg.PlanOutcomeReady))
+	})
+
+	It("an unknown compare status fails open", func() {
+		fakeFetcher := &mocks.Fetcher{}
+		fakeFetcher.FetchReturns(planChangelog, nil)
+		fakeRunner := &mocks.ClaudeRunnerMock{}
+		fakeRunner.RunReturns(&claudelib.ClaudeResult{
+			Result: `{"bump":"patch","reasoning":"stub"}`,
+		}, nil)
+		tagsFetcher := &mocks.TagsFetcher{}
+		tagsFetcher.CommitSHAForTagReturns(tagSHA, nil)
+		tagsFetcher.CompareCommitsReturns(
+			githubtags.CompareResult{Status: "", AheadBy: 0, BehindBy: intPtr(0)}, nil,
+		)
+
+		step := newStep(fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, tagsFetcher)
+		md, err := agentlib.ParseMarkdown(context.Background(), taskMD(refSHA))
+		Expect(err).NotTo(HaveOccurred())
+
+		result, err := step.Run(context.Background(), md)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.NextPhase).NotTo(Equal("done"))
+
+		plan, err := agentlib.ExtractSection[pkg.PlanOutput](context.Background(), md, "## Plan")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(plan.Outcome).To(Equal(pkg.PlanOutcomeReady))
+	})
+
+	It("a payload without behind_by never closes a task", func() {
+		fakeFetcher := &mocks.Fetcher{}
+		fakeFetcher.FetchReturns(planChangelog, nil)
+		fakeRunner := &mocks.ClaudeRunnerMock{}
+		fakeRunner.RunReturns(&claudelib.ClaudeResult{
+			Result: `{"bump":"patch","reasoning":"stub"}`,
+		}, nil)
+		tagsFetcher := &mocks.TagsFetcher{}
+		tagsFetcher.CommitSHAForTagReturns(tagSHA, nil)
+		// Status says "ahead" but the key is absent — must NOT read as 0.
+		tagsFetcher.CompareCommitsReturns(
+			githubtags.CompareResult{Status: "ahead", AheadBy: 1, BehindBy: nil}, nil,
+		)
+
+		step := newStep(fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, tagsFetcher)
+		md, err := agentlib.ParseMarkdown(context.Background(), taskMD(refSHA))
+		Expect(err).NotTo(HaveOccurred())
+
+		result, err := step.Run(context.Background(), md)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.NextPhase).NotTo(Equal("done"))
+
+		plan, err := agentlib.ExtractSection[pkg.PlanOutput](context.Background(), md, "## Plan")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(plan.Outcome).To(Equal(pkg.PlanOutcomeReady))
+	})
+
+	It("resolves a branch-name ref server-side, both ways", func() {
+		// Non-hex refs are no longer bounded client-side (spec 006 § Security):
+		// GitHub resolves the ref, so containment is decided on its real tip.
+		fakeFetcher := &mocks.Fetcher{}
+		fakeFetcher.FetchReturns(planChangelog, nil)
+		fakeRunner := &mocks.ClaudeRunnerMock{}
+		fakeRunner.RunReturns(&claudelib.ClaudeResult{
+			Result: `{"bump":"patch","reasoning":"stub"}`,
+		}, nil)
+		tagsFetcher := &mocks.TagsFetcher{}
+		tagsFetcher.CommitSHAForTagReturns(tagSHA, nil)
+		tagsFetcher.CompareCommitsReturns(
+			githubtags.CompareResult{Status: "behind", AheadBy: 0, BehindBy: intPtr(1)}, nil,
+		)
+
+		step := newStep(fakeRunner, fakeFetcher, &mocks.MaintainerConfigFetcher{}, tagsFetcher)
+		md, err := agentlib.ParseMarkdown(context.Background(), taskMD("main"))
+		Expect(err).NotTo(HaveOccurred())
+
+		result, err := step.Run(context.Background(), md)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.NextPhase).NotTo(Equal("done"))
+		Expect(tagsFetcher.CompareCommitsCallCount()).To(Equal(1))
+	})
+
+	It("closes a branch-name ref GitHub reports as contained", func() {
+		fakeFetcher := &mocks.Fetcher{}
+		fakeFetcher.FetchReturns(planChangelog, nil)
+		tagsFetcher := &mocks.TagsFetcher{}
+		tagsFetcher.CommitSHAForTagReturns(tagSHA, nil)
+		tagsFetcher.CompareCommitsReturns(
+			githubtags.CompareResult{Status: "ahead", AheadBy: 1, BehindBy: intPtr(0)}, nil,
+		)
+
+		step := newStep(
+			&mocks.ClaudeRunnerMock{},
+			fakeFetcher,
+			&mocks.MaintainerConfigFetcher{},
+			tagsFetcher,
+		)
+		md, err := agentlib.ParseMarkdown(context.Background(), taskMD("main"))
+		Expect(err).NotTo(HaveOccurred())
+
+		result, err := step.Run(context.Background(), md)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+		Expect(result.NextPhase).To(Equal("done"))
+	})
+
+	It("the framework deliverer writes the terminal state for a contained ref", func() {
+		taskFile := filepath.Join(GinkgoT().TempDir(), "task.md")
+		Expect(os.WriteFile(taskFile, []byte(taskMD(refSHA)), 0o600)).To(Succeed())
+
+		fakeFetcher := &mocks.Fetcher{}
+		fakeFetcher.FetchReturns(releasedChangelog, nil)
+		tagsFetcher := &mocks.TagsFetcher{}
+		tagsFetcher.CommitSHAForTagReturns(tagSHA, nil)
+		tagsFetcher.CompareCommitsReturns(
+			githubtags.CompareResult{Status: "ahead", AheadBy: 1, BehindBy: intPtr(0)}, nil,
+		)
+
+		step := newStep(
+			&mocks.ClaudeRunnerMock{}, fakeFetcher, &mocks.MaintainerConfigFetcher{}, tagsFetcher,
+		)
+		agent := agentlib.NewAgent(agentlib.NewPhase(domain.TaskPhasePlanning, step))
+		deliverer := delivery.NewFileResultDeliverer(
+			delivery.NewPassthroughContentGenerator(),
+			taskFile,
+		)
+
+		result, err := agent.Run(
+			context.Background(),
+			domain.TaskPhasePlanning,
+			taskMD(refSHA),
+			deliverer,
+		)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).NotTo(BeNil())
+		Expect(result.Status).To(Equal(agentlib.AgentStatusDone))
+
+		mutated, err := os.ReadFile(taskFile)
+		Expect(err).NotTo(HaveOccurred())
+		mutatedStr := string(mutated)
+
+		Expect(mutatedStr).To(ContainSubstring("status: completed"))
+		Expect(mutatedStr).To(ContainSubstring("phase: done"))
+		Expect(mutatedStr).To(ContainSubstring("assignee: github-releaser-agent"))
+		Expect(mutatedStr).NotTo(ContainSubstring("previous_assignee"))
+	})
+
+	DescribeTable("refContainedInTag",
+		func(r githubtags.CompareResult, want bool) {
+			Expect(pkg.RefContainedInTagForTest(r)).To(Equal(want))
+		},
+		Entry("ahead at 0 behind is contained",
+			githubtags.CompareResult{Status: "ahead", BehindBy: intPtr(0)}, true),
+		Entry("identical is contained",
+			githubtags.CompareResult{Status: "identical", BehindBy: intPtr(0)}, true),
+		Entry("behind is not contained",
+			githubtags.CompareResult{Status: "behind", BehindBy: intPtr(2)}, false),
+		Entry("diverged is not contained",
+			githubtags.CompareResult{Status: "diverged", BehindBy: intPtr(2)}, false),
+		Entry("unknown status is not proof",
+			githubtags.CompareResult{Status: "", BehindBy: intPtr(0)}, false),
+		Entry("absent behind_by is not proof",
+			githubtags.CompareResult{Status: "ahead", BehindBy: nil}, false),
+	)
+})

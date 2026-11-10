@@ -61,8 +61,10 @@ func isHexString(s string) bool {
 // sameCommit reports whether ref and tagCommit denote the same commit.
 // All four bounds must hold: both hex-only, both at least minRefMatchLen
 // characters, and — after lowercasing — the shorter is a prefix of the
-// longer. Empty, short, or non-hex input is always a non-match; a
-// nothing_to_release verdict may only be written on a positive match here.
+// longer. Empty, short, or non-hex input is always a non-match. This
+// equality bound now decides only the P1 malformed-changelog path; the
+// containment guard in Run writes nothing_to_release from GitHub's compare
+// payload instead (spec 006 § Constraints).
 func sameCommit(ref, tagCommit string) bool {
 	a := strings.ToLower(strings.TrimSpace(ref))
 	b := strings.ToLower(strings.TrimSpace(tagCommit))
@@ -147,11 +149,12 @@ func (s *planningStep) ShouldRun(_ context.Context, _ *agentlib.Markdown) (bool,
 	return true, nil
 }
 
-// Run executes the planning pipeline: read frontmatter, fetch CHANGELOG,
+// Run executes the planning pipeline: read frontmatter, close the task when
+// its ref is already contained in the released tag, fetch CHANGELOG,
 // validate, classify bump (spec 001/063), resolve changelogRewrite (spec 059),
 // optionally rewrite (spec 058), publish ## Plan.
 func (s *planningStep) Run(ctx context.Context, md *agentlib.Markdown) (*agentlib.Result, error) {
-	missingField, currentVersion, repo, cloneURL, ref := s.readRequired(md)
+	missingField, currentVersion, repo, _, ref := s.readRequired(md)
 	if missingField != "" {
 		glog.V(2).Infof("planning: missing frontmatter field=%s — escalating", missingField)
 		return s.escalate(ctx, md, escalation{
@@ -170,13 +173,16 @@ func (s *planningStep) Run(ctx context.Context, md *agentlib.Markdown) (*agentli
 			currentVersion:     currentVersion,
 		})
 	}
-	_ = cloneURL // currently unused by planning; future execution step will use it
 
 	// spec 001: resolve the effective current_version from the remote's
 	// highest semver tag. The frontmatter snapshot is the fallback.
 	effectiveVersion, tagWarning, _ := s.resolveCurrentVersion(ctx, owner, name, currentVersion)
 
 	cachedBump, cachedReasoning := s.readCachedBump(ctx, md)
+
+	if r := s.closeIfReleased(ctx, md, owner, name, ref, effectiveVersion); r != nil {
+		return r, nil
+	}
 
 	changelogBytes, err := s.fetcher.Fetch(ctx, owner, name, ref)
 	if err != nil {
@@ -710,6 +716,88 @@ func (s *planningStep) escalate(
 	}, nil
 }
 
+// refContainedInTag reports whether the compare payload proves base is an
+// ancestor of (or equal to) head. GitHub's compare(base...head) reports
+// behind_by = commits head lacks that base has, so behind_by == 0 means
+// head already contains everything base contains — the release shipped.
+// A nil BehindBy (key absent or renamed) is NOT proof: it fails open to
+// planning, as does any status other than "ahead" / "identical" (spec 006
+// § Failure Modes rows 3 and 6).
+func refContainedInTag(r githubtags.CompareResult) bool {
+	if r.BehindBy == nil || *r.BehindBy != 0 {
+		return false
+	}
+	return r.Status == "ahead" || r.Status == "identical"
+}
+
+// refAlreadyReleased reports whether ref is already contained in the named
+// tag's commit, and returns the tag commit for the audit record. Fail-open
+// by construction: EVERY error path returns (false, ""), so a transport
+// failure, a rate limit, an absent tag or a decode error falls through to
+// today's planning exactly as if the guard did not exist. An outage can
+// never close a task (spec 006 § Constraints).
+func (s *planningStep) refAlreadyReleased(
+	ctx context.Context,
+	owner, name, ref, tag string,
+) (bool, string) {
+	tagCommit := s.releaseTagCommit(ctx, owner, name, tag)
+	if tagCommit == "" {
+		return false, ""
+	}
+	cmp, err := s.tagsFetcher.CompareCommits(ctx, owner, name, ref, tagCommit)
+	if err != nil {
+		glog.Warningf(
+			"planning: compare failed for %s/%s ref=%s tag=%s (continuing as not released): %v",
+			owner, name, ref, tag, err,
+		)
+		return false, ""
+	}
+	released := refContainedInTag(cmp)
+	behind := -1 // -1 means "key absent" — distinct from a real 0
+	if cmp.BehindBy != nil {
+		behind = *cmp.BehindBy
+	}
+	glog.V(2).Infof(
+		"planning: containment_check ref=%s tag=%s tag_commit=%s status=%s ahead=%d behind=%d released=%t",
+		ref, tag, tagCommit, cmp.Status, cmp.AheadBy, behind, released,
+	)
+	return released, tagCommit
+}
+
+// closeIfReleased returns a terminal result when the task's ref is already
+// contained in the released tag, and nil when planning should continue. A
+// record whose ref is already released has nothing left to release: without
+// this check the happy path re-plans the NEXT version from the pre-release
+// ref, where ## Unreleased is still present, and returns NextPhase=execution
+// — so the record never writes a terminal state for the version it actually
+// shipped (spec 006). Extracted from Run to stay within the funlen budget.
+//
+// A marshal failure on the terminal write is surfaced as a Failed result
+// rather than swallowed, so the framework parks the task instead of planning
+// a version that is already released.
+func (s *planningStep) closeIfReleased(
+	ctx context.Context,
+	md *agentlib.Markdown,
+	owner, name, ref, effectiveVersion string,
+) *agentlib.Result {
+	released, tagCommit := s.refAlreadyReleased(ctx, owner, name, ref, effectiveVersion)
+	if !released {
+		return nil
+	}
+	result, err := s.publishNothingToRelease(ctx, md, effectiveVersion, tagCommit, fmt.Sprintf(
+		"nothing to release: task ref %s is already contained in tag %s (%s)",
+		ref, effectiveVersion, tagCommit,
+	))
+	if err != nil {
+		glog.Warningf("planning: publish nothing_to_release failed: %v", err)
+		return &agentlib.Result{
+			Status:  agentlib.AgentStatusFailed,
+			Message: "publish nothing_to_release: " + err.Error(),
+		}
+	}
+	return result
+}
+
 // releaseTagCommit returns the commit SHA the named tag points at, or ""
 // when the tag is absent or the lookup failed. Fail-open by construction:
 // EVERY error path returns "", which yields a non-match and therefore the
@@ -762,7 +850,10 @@ func (s *planningStep) handleValidationFailure(
 			ref, effectiveVersion, tagCommit, verdict,
 		)
 		if verdict == PlanOutcomeNothingToRelease {
-			return s.publishNothingToRelease(ctx, md, effectiveVersion, tagCommit)
+			return s.publishNothingToRelease(ctx, md, effectiveVersion, tagCommit, fmt.Sprintf(
+				"nothing to release: task ref is the commit tag %s already points at (%s)",
+				effectiveVersion, tagCommit,
+			))
 		}
 	}
 	return s.escalate(ctx, md, escalation{
@@ -773,10 +864,13 @@ func (s *planningStep) handleValidationFailure(
 }
 
 // publishNothingToRelease writes a ## Plan(outcome=nothing_to_release)
-// block naming the tag and the shared commit SHA, marks the task
-// completed/done, and returns the EXPLICIT terminal disposition
+// block naming the tag and the commit compared against the ref, marks the
+// task completed/done, and returns the EXPLICIT terminal disposition
 // (Status=Done, NextPhase="done") used by ai_review's finishReviewOverride
 // — never the empty-NextPhase auto-advance (bug 048).
+//
+// Two callers supply their own reason: the P1 equality path (the tag points
+// at the ref) and the containment guard (the tag's commit contains the ref).
 //
 // It deliberately writes NO escalation frontmatter: `assignee` is left
 // byte-identical to its input value and `previous_assignee` is never set.
@@ -784,12 +878,8 @@ func (s *planningStep) handleValidationFailure(
 func (s *planningStep) publishNothingToRelease(
 	ctx context.Context,
 	md *agentlib.Markdown,
-	tag, tagCommit string,
+	tag, tagCommit, reason string,
 ) (*agentlib.Result, error) {
-	reason := fmt.Sprintf(
-		"nothing to release: task ref is the commit tag %s already points at (%s)",
-		tag, tagCommit,
-	)
 	output := PlanOutput{
 		Outcome:        PlanOutcomeNothingToRelease,
 		Reason:         reason,
