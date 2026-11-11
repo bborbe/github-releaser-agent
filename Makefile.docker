@@ -40,7 +40,11 @@ ifeq ($(origin BUILD_TARGET),undefined)
       REF ?= $(shell git rev-parse HEAD)
       VERSION_AUTO := $(if $(BRANCH),$(subst /,-,$(BRANCH)),scratch)-$(shell git rev-parse --short HEAD)
       ifneq ($(origin VERSION),command line)
-        ALLOW_DEFAULT_VERSION := 1
+        ifneq ($(origin VERSION),environment)
+          ifneq ($(origin VERSION),environment override)
+            ALLOW_DEFAULT_VERSION := 1
+          endif
+        endif
       endif
     else
       BUILD_TARGET := local
