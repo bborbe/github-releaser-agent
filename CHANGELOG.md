@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- feat: `make build` resolves `BUILD_TARGET` from a bounded sun probe - sun when reachable, local docker as the fallback. An explicit `BUILD_TARGET` always wins, and the decision prints at parse time so it is visible under `make -n`
+
 ## v0.10.2
 
 - chore: update github.com/bborbe/agent to v0.139.7, github.com/bborbe/collection to v1.21.6, github.com/bborbe/errors to v1.6.6, github.com/bborbe/kafka to v1.29.13, github.com/bborbe/maintainer to v0.51.1, github.com/bborbe/sentry to v1.10.7, github.com/bborbe/time to v1.27.26, github.com/bborbe/validation to v1.5.9, github.com/bborbe/vault-cli to v0.191.0, github.com/onsi/ginkgo/v2 to v2.34.0
