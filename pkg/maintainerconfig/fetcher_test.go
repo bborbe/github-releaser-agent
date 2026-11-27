@@ -313,4 +313,31 @@ var _ = Describe("httpFetcher", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring(`unsupported encoding ""`))
 	})
+
+	It("retries a 429 and succeeds on the second attempt", func() {
+		yamlBytes := []byte("release:\n  changelogRewrite: true\n")
+		encoded := base64.StdEncoding.EncodeToString(yamlBytes)
+		requestCount := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount++
+			if requestCount == 1 {
+				w.Header().Set("Retry-After", "1")
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"encoding": "base64",
+				"content":  encoded,
+			})
+		}))
+		defer server.Close()
+
+		fetcher := maintainerconfig.NewHTTPFetcherForTest("", server.URL)
+		data, err := fetcher.Fetch(ctx, "bborbe", "maintainer", "master")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(data).To(Equal(yamlBytes))
+		Expect(requestCount).To(Equal(2))
+	})
 })

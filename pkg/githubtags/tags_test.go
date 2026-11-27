@@ -591,6 +591,30 @@ var _ = Describe("httpTagsFetcher", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(capturedAuth).To(Equal("Bearer test-token"))
 	})
+
+	It("31: retries a 429 and succeeds on the second attempt", func() {
+		requestCount := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount++
+			if requestCount == 1 {
+				w.Header().Set("Retry-After", "1")
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(tagJSONWithCommits([][2]string{
+				{"v1.0.0", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			})))
+		}))
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+		latest, err := fetcher.LatestSemverTag(ctx, "foo", "bar")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(latest).To(Equal("v1.0.0"))
+		Expect(requestCount).To(Equal(2))
+	})
 })
 
 var _ = Describe("CompareCommits", func() {

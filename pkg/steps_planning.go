@@ -825,12 +825,13 @@ func (s *planningStep) releaseTagCommit(
 // handleValidationFailure decides between completing the task as
 // nothing_to_release and the unchanged escalation.
 //
-// The release-tag check runs ONLY on a P1_unreleased_not_first failure —
-// the one case where a healthy post-release changelog is misread as
-// malformed. Every other precondition (P2_unreleased_empty,
-// bad_current_version, missing_frontmatter_*) escalates without touching
-// the tag seam, so the happy path and the other failure paths make no
-// extra GitHub request (spec 002 § Constraints).
+// The release-tag check in THIS function runs ONLY on a
+// P1_unreleased_not_first failure — the one case where a healthy
+// post-release changelog is misread as malformed. Every other
+// precondition (P2_unreleased_empty, bad_current_version,
+// missing_frontmatter_*) escalates without a commit lookup here. The
+// containment guard in Run runs on every planning pass instead, before
+// the changelog is fetched (spec 006 § Constraints).
 //
 // effectiveVersion is the tag resolved by resolveCurrentVersion and is
 // the tag consulted for the commit lookup. snapshotVersion is the

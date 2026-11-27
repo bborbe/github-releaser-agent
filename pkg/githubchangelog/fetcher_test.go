@@ -224,4 +224,29 @@ var _ = Describe("httpFetcher", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(data).To(Equal([]byte("## Unreleased\n")))
 	})
+
+	It("retries a 429 and succeeds on the second attempt", func() {
+		requestCount := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount++
+			if requestCount == 1 {
+				w.Header().Set("Retry-After", "1")
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"encoding": "base64",
+				"content":  "IyMgVW5yZWxlYXNlZAo=",
+			})
+		}))
+		defer server.Close()
+
+		fetcher := githubchangelog.NewHTTPFetcherForTest("test-token", server.URL)
+		data, err := fetcher.Fetch(ctx, "bborbe", "maintainer", "master")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(data).To(Equal([]byte("## Unreleased\n")))
+		Expect(requestCount).To(Equal(2))
+	})
 })

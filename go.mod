@@ -11,6 +11,7 @@ require (
 	github.com/bborbe/collection v1.21.9
 	github.com/bborbe/cqrs v0.6.17
 	github.com/bborbe/errors v1.7.1
+	github.com/bborbe/http v1.28.1
 	github.com/bborbe/kafka v1.30.3
 	github.com/bborbe/maintainer v0.52.1
 	github.com/bborbe/sentry v1.11.1
@@ -29,7 +30,6 @@ require (
 	github.com/IBM/sarama v1.62.0 // indirect
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/bborbe/argument/v2 v2.13.13 // indirect
-	github.com/bborbe/http v1.28.0 // indirect
 	github.com/bborbe/k8s v1.16.2 // indirect
 	github.com/bborbe/kv v1.21.31 // indirect
 	github.com/bborbe/log v1.7.10 // indirect
