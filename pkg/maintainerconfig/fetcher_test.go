@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"time"
 
 	"github.com/bborbe/errors"
 	"github.com/bborbe/github-releaser-agent/pkg/maintainerconfig"
@@ -312,5 +313,68 @@ var _ = Describe("httpFetcher", func() {
 		_, err := fetcher.Fetch(ctx, "bborbe", "maintainer", "master")
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring(`unsupported encoding ""`))
+	})
+
+	It("retries a 429 and succeeds on the second attempt", func() {
+		yamlBytes := []byte("release:\n  changelogRewrite: true\n")
+		encoded := base64.StdEncoding.EncodeToString(yamlBytes)
+		requestCount := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount++
+			if requestCount == 1 {
+				w.Header().Set("Retry-After", "1")
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"encoding": "base64",
+				"content":  encoded,
+			})
+		}))
+		defer server.Close()
+
+		fetcher := maintainerconfig.NewHTTPFetcherForTest("", server.URL)
+		data, err := fetcher.Fetch(ctx, "bborbe", "maintainer", "master")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(data).To(Equal(yamlBytes))
+		Expect(requestCount).To(Equal(2))
+	})
+
+	It("defers a 429 whose Retry-After exceeds the max wait", func() {
+		requestCount := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount++
+			w.Header().Set("Retry-After", "60")
+			w.WriteHeader(http.StatusTooManyRequests)
+		}))
+		defer server.Close()
+
+		fetcher := maintainerconfig.NewHTTPFetcherForTest("", server.URL)
+		started := time.Now()
+		_, err := fetcher.Fetch(ctx, "bborbe", "maintainer", "master")
+		elapsed := time.Since(started)
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("status 429"))
+		Expect(requestCount).To(Equal(1))
+		Expect(elapsed).To(BeNumerically("<", 5*time.Second))
+	})
+
+	It("does not retry a plain 403", func() {
+		requestCount := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount++
+			w.WriteHeader(http.StatusForbidden)
+		}))
+		defer server.Close()
+
+		fetcher := maintainerconfig.NewHTTPFetcherForTest("", server.URL)
+		_, err := fetcher.Fetch(ctx, "bborbe", "maintainer", "master")
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("status 403"))
+		Expect(requestCount).To(Equal(1))
 	})
 })

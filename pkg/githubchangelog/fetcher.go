@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/bborbe/errors"
+	libhttp "github.com/bborbe/http"
 	"github.com/golang/glog"
 )
 
@@ -43,17 +44,42 @@ type Fetcher interface {
 // context-deadline-exceeded error.
 func NewHTTPFetcher(token string) Fetcher {
 	return &httpFetcher{
-		client:  &http.Client{Timeout: 15 * time.Second},
+		client: &http.Client{
+			Timeout:   15 * time.Second,
+			Transport: retryTransportFor("https://api.github.com"),
+		},
 		token:   token,
 		apiBase: "https://api.github.com",
 	}
+}
+
+// retryTransportFor wraps the default transport with the shared rate-limit
+// retry round tripper. api.github.com is always retried; the host of apiBase
+// is added too when it differs, so a test seam pointing at a stub server is
+// covered without duplicating the production host. Waits longer than five
+// seconds are deferred so they would not otherwise exceed the client's
+// 15-second timeout and surface as a context-deadline error rather than as
+// the rate-limit response.
+func retryTransportFor(apiBase string) http.RoundTripper {
+	hosts := []string{"api.github.com"}
+	if u, err := url.Parse(apiBase); err == nil && u.Hostname() != "" &&
+		u.Hostname() != "api.github.com" {
+		hosts = append(hosts, u.Hostname())
+	}
+	return libhttp.NewRoundTripperRetryWithBackoff(
+		http.DefaultTransport,
+		libhttp.RetryBackoffOptions{RetryHosts: hosts, MaxWait: 5 * time.Second},
+	)
 }
 
 // newHTTPFetcherWithBase is an internal constructor used by tests to
 // point the fetcher at a test server. Not exported.
 func newHTTPFetcherWithBase(token, apiBase string) Fetcher {
 	return &httpFetcher{
-		client:  &http.Client{Timeout: 15 * time.Second},
+		client: &http.Client{
+			Timeout:   15 * time.Second,
+			Transport: retryTransportFor(apiBase),
+		},
 		token:   token,
 		apiBase: apiBase,
 	}

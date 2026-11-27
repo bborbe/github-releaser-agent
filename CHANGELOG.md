@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.11.5
+
+- fix: the GitHub HTTP clients (`githubtags`, `githubchangelog`, `githubreview`, `maintainerconfig`) now defer any rate-limit retry whose wait exceeds five seconds, so the caller sees the real 429/403 response promptly instead of blocking until the client's 15-second timeout surfaces a context-deadline error; shorter waits are still slept and retried
+
+## v0.11.4
+
+- fix: all four GitHub HTTP clients (`githubtags`, `githubchangelog`, `githubreview`, `maintainerconfig`) now retry a rate-limited response instead of failing the work item. A 429 or a rate-limiting 403 from `api.github.com` is retried with the wait the response asks for, up to five attempts, through the shared `github.com/bborbe/http` retry round tripper, and each retry logs the attempt, status, class and wait. The dependency is raised to `v1.28.1` so a 429 carrying positive remaining quota classifies as `secondary` rather than `unclassified`
+- fix(planning): a release task whose ref is already contained in the effective current version's tag now closes as `completed` instead of re-planning the next version. The "already released?" check previously ran only after a `P1_unreleased_not_first` validation failure, so a healthy re-trigger re-planned forever and never wrote a terminal state — measured across 24 records on 2026-11-08. The check now runs on every planning pass and uses GitHub's compare payload (ref contained in the tag commit) rather than commit equality, which could never fire because the release commit is a child of the task ref. A ref ahead of or diverged from the tag still plans; any lookup or compare error falls through to planning unchanged
+
 ## v0.11.3
 
 - chore: update github.com/bborbe/agent to v0.148.3, github.com/bborbe/collection to v1.21.9, github.com/bborbe/cqrs to v0.6.17, github.com/bborbe/errors to v1.7.1, github.com/bborbe/kafka to v1.30.3, github.com/bborbe/maintainer to v0.52.1, github.com/bborbe/sentry to v1.11.1, github.com/bborbe/service to v1.12.2, github.com/bborbe/time to v1.27.29, github.com/bborbe/validation to v1.5.12, github.com/bborbe/vault-cli to v0.200.6

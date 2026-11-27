@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"time"
 
 	"github.com/bborbe/github-releaser-agent/pkg/githubreview"
 	. "github.com/onsi/ginkgo/v2"
@@ -166,6 +167,74 @@ var _ = Describe("httpClient", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("TagExists"))
 			Expect(err.Error()).To(ContainSubstring("decode json"))
+		})
+
+		It("retries a 429 and succeeds on the second attempt", func() {
+			requestCount := 0
+			server := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					requestCount++
+					if requestCount == 1 {
+						w.Header().Set("Retry-After", "1")
+						w.WriteHeader(http.StatusTooManyRequests)
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{
+						"object": map[string]string{
+							"sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+						},
+					})
+				}),
+			)
+			defer server.Close()
+
+			client := githubreview.NewHTTPClientForTest("test-token", server.URL)
+			sha, err := client.TagExists(ctx, "bborbe", "maintainer", "v1.0.0")
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(sha).To(Equal("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+			Expect(requestCount).To(Equal(2))
+		})
+
+		It("defers a 429 whose Retry-After exceeds the max wait", func() {
+			requestCount := 0
+			server := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					requestCount++
+					w.Header().Set("Retry-After", "60")
+					w.WriteHeader(http.StatusTooManyRequests)
+				}),
+			)
+			defer server.Close()
+
+			client := githubreview.NewHTTPClientForTest("test-token", server.URL)
+			started := time.Now()
+			_, err := client.TagExists(ctx, "bborbe", "maintainer", "v1.0.0")
+			elapsed := time.Since(started)
+
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("status 429"))
+			Expect(requestCount).To(Equal(1))
+			Expect(elapsed).To(BeNumerically("<", 5*time.Second))
+		})
+
+		It("does not retry a plain 403", func() {
+			requestCount := 0
+			server := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					requestCount++
+					w.WriteHeader(http.StatusForbidden)
+				}),
+			)
+			defer server.Close()
+
+			client := githubreview.NewHTTPClientForTest("test-token", server.URL)
+			_, err := client.TagExists(ctx, "bborbe", "maintainer", "v1.0.0")
+
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("status 403"))
+			Expect(requestCount).To(Equal(1))
 		})
 	})
 

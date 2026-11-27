@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"time"
 
 	"github.com/bborbe/github-releaser-agent/pkg/githubtags"
 	. "github.com/onsi/ginkgo/v2"
@@ -590,6 +591,66 @@ var _ = Describe("httpTagsFetcher", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(capturedAuth).To(Equal("Bearer test-token"))
+	})
+
+	It("31: retries a 429 and succeeds on the second attempt", func() {
+		requestCount := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount++
+			if requestCount == 1 {
+				w.Header().Set("Retry-After", "1")
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(tagJSONWithCommits([][2]string{
+				{"v1.0.0", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			})))
+		}))
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+		latest, err := fetcher.LatestSemverTag(ctx, "foo", "bar")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(latest).To(Equal("v1.0.0"))
+		Expect(requestCount).To(Equal(2))
+	})
+
+	It("32: defers a 429 whose Retry-After exceeds the max wait", func() {
+		requestCount := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount++
+			w.Header().Set("Retry-After", "60")
+			w.WriteHeader(http.StatusTooManyRequests)
+		}))
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+		started := time.Now()
+		_, err := fetcher.LatestSemverTag(ctx, "foo", "bar")
+		elapsed := time.Since(started)
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("status 429"))
+		Expect(requestCount).To(Equal(1))
+		Expect(elapsed).To(BeNumerically("<", 5*time.Second))
+	})
+
+	It("33: does not retry a plain 403", func() {
+		requestCount := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount++
+			w.WriteHeader(http.StatusForbidden)
+		}))
+		defer server.Close()
+
+		fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+		_, err := fetcher.LatestSemverTag(ctx, "foo", "bar")
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("status 403"))
+		Expect(requestCount).To(Equal(1))
 	})
 })
 
