@@ -1,8 +1,9 @@
 ---
-status: approved
+status: cancelled
 spec: [006-planning-containment-guard]
 created: "2026-11-10T13:45:00Z"
 queued: "2026-11-10T13:30:57Z"
+cancelled: "2026-11-27T09:59:24Z"
 ---
 
 # Close a release task whose ref is already released, before it re-plans

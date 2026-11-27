@@ -1,5 +1,12 @@
 ---
-status: draft
+status: failed
+created: "2026-11-27T09:59:40Z"
+queued: "2026-11-27T09:59:40Z"
+completed: "2026-11-27T10:00:50Z"
+lastFailReason: |-
+    setup workflow: git merge origin default branch: merge origin/master: error: Your local changes to the following files would be overwritten by merge:
+      prompts/cancelled/017-planning-containment-guard.md
+    Merge with strategy ort failed.: git merge origin/master failed: exit status 2
 ---
 
 <summary>
