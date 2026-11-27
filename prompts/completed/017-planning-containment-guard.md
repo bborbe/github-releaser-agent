@@ -1,9 +1,13 @@
 ---
-status: cancelled
+status: completed
 spec: [006-planning-containment-guard]
+summary: 'Completed spec-006 containment guard: verified CompareCommits/refContainedInTag/refAlreadyReleased/guard/tests/docs, corrected the stale handleValidationFailure doc comment, and recorded the fix under CHANGELOG ## Unreleased.'
+execution_id: 71dddf89-ff27-5f4b-96dc-fee0c98ad176-exec-017-planning-containment-guard
+dark-factory-version: dev
 created: "2026-11-10T13:45:00Z"
 queued: "2026-11-10T13:30:57Z"
-cancelled: "2026-11-27T09:59:24Z"
+started: "2026-11-27T09:03:48Z"
+completed: "2026-11-27T09:18:22Z"
 ---
 
 # Close a release task whose ref is already released, before it re-plans
