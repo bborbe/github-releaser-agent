@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- fix: the GitHub HTTP clients (`githubtags`, `githubchangelog`, `githubreview`, `maintainerconfig`) now defer any rate-limit retry whose wait exceeds five seconds, so the caller sees the real 429/403 response promptly instead of blocking until the client's 15-second timeout surfaces a context-deadline error; shorter waits are still slept and retried
+
 ## v0.11.4
 
 - fix: all four GitHub HTTP clients (`githubtags`, `githubchangelog`, `githubreview`, `maintainerconfig`) now retry a rate-limited response instead of failing the work item. A 429 or a rate-limiting 403 from `api.github.com` is retried with the wait the response asks for, up to five attempts, through the shared `github.com/bborbe/http` retry round tripper, and each retry logs the attempt, status, class and wait. The dependency is raised to `v1.28.1` so a 429 carrying positive remaining quota classifies as `secondary` rather than `unclassified`
