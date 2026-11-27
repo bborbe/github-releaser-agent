@@ -1,9 +1,12 @@
 ---
-status: failed
+status: completed
+summary: Bounded the retry transport's per-attempt wait with MaxWait=5s in all four GitHub clients, added defer/403 tests, and updated the changelog
+execution_id: releaser-maxwait-exec-017-bound-retry-wait-below-client-timeout
+dark-factory-version: v0.198.17
 created: "2026-11-27T09:59:40Z"
 queued: "2026-11-27T09:59:40Z"
-completed: "2026-11-27T10:02:21Z"
-lastFailReason: 'setup workflow: git merge origin default branch: merge origin/master: : git merge origin/master failed: exit status 1'
+started: "2026-11-27T10:05:55Z"
+completed: "2026-11-27T10:09:01Z"
 ---
 
 <summary>

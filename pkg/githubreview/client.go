@@ -101,7 +101,10 @@ func newHTTPClientWithBase(token, apiBase string) Client {
 // retryTransportFor wraps the default transport with the shared rate-limit
 // retry round tripper. api.github.com is always retried; the host of apiBase
 // is added too when it differs, so a test seam pointing at a stub server is
-// covered without duplicating the production host.
+// covered without duplicating the production host. Waits longer than five
+// seconds are deferred so they would not otherwise exceed the client's
+// 15-second timeout and surface as a context-deadline error rather than as
+// the rate-limit response.
 func retryTransportFor(apiBase string) http.RoundTripper {
 	hosts := []string{"api.github.com"}
 	if u, err := url.Parse(apiBase); err == nil && u.Hostname() != "" &&
@@ -110,7 +113,7 @@ func retryTransportFor(apiBase string) http.RoundTripper {
 	}
 	return libhttp.NewRoundTripperRetryWithBackoff(
 		http.DefaultTransport,
-		libhttp.RetryBackoffOptions{RetryHosts: hosts},
+		libhttp.RetryBackoffOptions{RetryHosts: hosts, MaxWait: 5 * time.Second},
 	)
 }
 
