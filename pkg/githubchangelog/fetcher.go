@@ -56,10 +56,12 @@ func NewHTTPFetcher(token string) Fetcher {
 // retryTransportFor wraps the default transport with the shared rate-limit
 // retry round tripper. api.github.com is always retried; the host of apiBase
 // is added too when it differs, so a test seam pointing at a stub server is
-// covered without duplicating the production host. Waits longer than five
-// seconds are deferred so they would not otherwise exceed the client's
-// 15-second timeout and surface as a context-deadline error rather than as
-// the rate-limit response.
+// covered without duplicating the production host. MaxWait bounds a single
+// wait, not the whole call: MaxAttempts (default 5) multiplies it, so MaxWait
+// is set to one second to keep the worst-case sleep (5 × 1s) inside the
+// client's 15-second timeout, leaving ten seconds for the requests themselves.
+// A longer wait is deferred, so the rate-limit response is returned promptly
+// instead of surfacing as a context-deadline error.
 func retryTransportFor(apiBase string) http.RoundTripper {
 	hosts := []string{"api.github.com"}
 	if u, err := url.Parse(apiBase); err == nil && u.Hostname() != "" &&
@@ -68,7 +70,7 @@ func retryTransportFor(apiBase string) http.RoundTripper {
 	}
 	return libhttp.NewRoundTripperRetryWithBackoff(
 		http.DefaultTransport,
-		libhttp.RetryBackoffOptions{RetryHosts: hosts, MaxWait: 5 * time.Second},
+		libhttp.RetryBackoffOptions{RetryHosts: hosts, MaxWait: 1 * time.Second},
 	)
 }
 

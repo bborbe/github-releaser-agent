@@ -637,6 +637,32 @@ var _ = Describe("httpTagsFetcher", func() {
 		Expect(elapsed).To(BeNumerically("<", 5*time.Second))
 	})
 
+	It(
+		"32b: bounds the total retry sleep so a repeated four-second wait does not exhaust the deadline",
+		func() {
+			requestCount := 0
+			server := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					requestCount++
+					w.Header().Set("Retry-After", "4")
+					w.WriteHeader(http.StatusTooManyRequests)
+				}),
+			)
+			defer server.Close()
+
+			fetcher := githubtags.NewHTTPTagsFetcherForTest("test-token", server.URL)
+			started := time.Now()
+			_, err := fetcher.LatestSemverTag(ctx, "foo", "bar")
+			elapsed := time.Since(started)
+
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("status 429"))
+			Expect(err.Error()).NotTo(ContainSubstring("context deadline exceeded"))
+			Expect(requestCount).To(Equal(1))
+			Expect(elapsed).To(BeNumerically("<", 5*time.Second))
+		},
+	)
+
 	It("33: does not retry a plain 403", func() {
 		requestCount := 0
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -219,6 +219,32 @@ var _ = Describe("httpClient", func() {
 			Expect(elapsed).To(BeNumerically("<", 5*time.Second))
 		})
 
+		It(
+			"bounds the total retry sleep so a repeated four-second wait does not exhaust the deadline",
+			func() {
+				requestCount := 0
+				server := httptest.NewServer(
+					http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						requestCount++
+						w.Header().Set("Retry-After", "4")
+						w.WriteHeader(http.StatusTooManyRequests)
+					}),
+				)
+				defer server.Close()
+
+				client := githubreview.NewHTTPClientForTest("test-token", server.URL)
+				started := time.Now()
+				_, err := client.TagExists(ctx, "bborbe", "maintainer", "v1.0.0")
+				elapsed := time.Since(started)
+
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("status 429"))
+				Expect(err.Error()).NotTo(ContainSubstring("context deadline exceeded"))
+				Expect(requestCount).To(Equal(1))
+				Expect(elapsed).To(BeNumerically("<", 5*time.Second))
+			},
+		)
+
 		It("does not retry a plain 403", func() {
 			requestCount := 0
 			server := httptest.NewServer(
