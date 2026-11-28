@@ -1,5 +1,12 @@
 ---
-status: draft
+status: completed
+summary: Lowered MaxWait from 5s to 1s in all four GitHub retry transports so the worst-case total retry sleep (5 x 1s) fits inside the 15s client timeout, documented the budget arithmetic, added a discriminating 4s Retry-After test per package, and updated CHANGELOG.
+execution_id: github-releaser-agent-budget-exec-018-bound-total-retry-budget
+dark-factory-version: v0.198.17
+created: "2026-11-28T01:27:08Z"
+queued: "2026-11-28T01:27:08Z"
+started: "2026-11-28T01:28:28Z"
+completed: "2026-11-28T01:30:52Z"
 ---
 
 <summary>

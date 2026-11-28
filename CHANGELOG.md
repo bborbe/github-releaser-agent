@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- fix: the four GitHub HTTP clients (`githubtags`, `githubchangelog`, `githubreview`, `maintainerconfig`) now bound the total retry sleep rather than a single wait. `MaxWait` drops from five seconds to one so the worst case across the default five attempts (5 × 1s = 5s) stays inside the client's 15-second timeout; previously a server sending a repeated short `Retry-After` could accumulate 25 seconds of sleeping and surface `retry wait cancelled: context deadline exceeded` instead of the real 429/403. A wait beyond one second is still deferred immediately, so the rate-limit response is returned promptly
+
 ## v0.11.5
 
 - fix: the GitHub HTTP clients (`githubtags`, `githubchangelog`, `githubreview`, `maintainerconfig`) now defer any rate-limit retry whose wait exceeds five seconds, so the caller sees the real 429/403 response promptly instead of blocking until the client's 15-second timeout surfaces a context-deadline error; shorter waits are still slept and retried
